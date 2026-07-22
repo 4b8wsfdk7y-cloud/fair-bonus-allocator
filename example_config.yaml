@@ -1,0 +1,119 @@
+# Example configuration: wind cable manufacturer, ¥1M cost-reduction bonus pool.
+# Based on a composite industrial scenario; no real company data.
+#
+# Unit convention: every KPI's unit must pair with its β such that
+#     β × ΔKPI = profit delta (in yuan)
+# e.g.:
+#   Sales KPI unit = "yuan of revenue", β=0.08 (each ¥1 revenue → ¥0.08 profit)
+#   Procurement KPI unit = "yuan of cost reduction", β=1.0 (direct pass-through)
+#   Manufacturing KPI unit = "efficiency %", β=250000 (each 1% → ¥250k profit)
+#
+# v2 governance fields (optional; defaults degrade to v1 behavior):
+#   quota: responsibility share q_d (sum=1). If omitted for all departments,
+#       derived from stretch_impact share.
+#   beta_ci_lower / beta_ci_upper: 95% CI bounds for β̂. If omitted, SE(β)=0
+#       and the lower bound equals β̂ itself (no conservative adjustment).
+#   beta_confidence_weight: ρ_d ∈ [0,1], how trustworthy the β estimate is.
+#       Default 1.0; suggested by source: RCT 1.0, regression 0.7, expert 0.3.
+#   beta_source: estimation source label
+#       (regression/bridge_model/expert_estimate/...).
+
+pool:
+  pool_total: 1000000
+  profit_target: 20000000     # ¥20M target profit
+  profit_baseline: 17000000   # baseline profit at KPI=100% across all depts
+  theta_a: 0.15
+  theta_s: 0.30
+  divisions: 1000
+  min_pool_share: 0.02
+  # v2 governance
+  lambda_base_ratio: 0.3      # 30% of pool split by headcount (base pool)
+  a_max: 1.5                  # achievement-rate clip ceiling
+  deferred_pool_enabled: true # allow residual pool to defer when frozen
+
+departments:
+  - name: Sales
+    kpi_baseline: 200000000   # ¥200M revenue
+    kpi_stretch: 230000000    # ¥230M
+    beta: 0.08
+    headcount: 20
+    beta_ci_lower: 0.06
+    beta_ci_upper: 0.10
+    beta_confidence_weight: 0.7
+    beta_source: regression
+    quota: 0.20
+
+  - name: Logistics
+    kpi_baseline: 92          # on-time delivery %
+    kpi_stretch: 98
+    beta: 50000
+    headcount: 8
+    beta_confidence_weight: 0.3
+    beta_source: expert_estimate
+    quota: 0.05
+
+  - name: Procurement
+    kpi_baseline: 3000000     # annual cost reduction (yuan)
+    kpi_stretch: 5000000
+    beta: 1.0
+    headcount: 10
+    beta_ci_lower: 1.0
+    beta_ci_upper: 1.0
+    beta_confidence_weight: 1.0
+    beta_source: bridge_model
+    quota: 0.20
+
+  - name: SupplyChain-Sourcing
+    kpi_baseline: 5           # new suppliers onboarded
+    kpi_stretch: 12
+    beta: 80000
+    headcount: 4
+    beta_ci_lower: 50000
+    beta_ci_upper: 110000
+    beta_confidence_weight: 0.5
+    beta_source: industry_benchmark
+    quota: 0.05
+
+  - name: Engineering
+    kpi_baseline: 0           # design cost-reduction projects
+    kpi_stretch: 8
+    beta: 150000
+    headcount: 12
+    beta_ci_lower: 90000
+    beta_ci_upper: 210000
+    beta_confidence_weight: 0.6
+    beta_source: regression
+    quota: 0.15
+
+  - name: PMC
+    kpi_baseline: 0           # inventory turn days reduced
+    kpi_stretch: 15
+    beta: 20000
+    headcount: 6
+    beta_ci_lower: 14000
+    beta_ci_upper: 26000
+    beta_confidence_weight: 0.7
+    beta_source: bridge_model
+    quota: 0.05
+
+  - name: Manufacturing
+    kpi_baseline: 84          # production efficiency %
+    kpi_stretch: 90
+    beta: 250000
+    headcount: 80
+    beta_ci_lower: 220000
+    beta_ci_upper: 280000
+    beta_confidence_weight: 0.9
+    beta_source: bridge_model
+    quota: 0.25
+
+  - name: Quality
+    kpi_baseline: 0           # customer-complaint reduction (count)
+    kpi_stretch: 5
+    beta: 100000
+    headcount: 8
+    beta_ci_lower: 70000
+    beta_ci_upper: 130000
+    beta_confidence_weight: 0.8
+    beta_source: bridge_model
+    quota: 0.05

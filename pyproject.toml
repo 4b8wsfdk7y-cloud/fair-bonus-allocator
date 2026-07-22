@@ -1,0 +1,16 @@
+[project]
+name = "bonus-allocator"
+version = "0.1.0"
+description = "Sensitivity-driven bonus pool allocator for multi-department fairness"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "pyyaml>=6.0",
+    "streamlit>=1.30",
+    "plotly>=5.20",
+    "statsmodels>=0.14",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
