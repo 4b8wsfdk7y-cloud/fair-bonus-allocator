@@ -2,6 +2,8 @@
 
 **A sensitivity-driven bonus pool allocator that translates heterogeneous department KPIs into a common currency — marginal profit contribution — and distributes a shared bonus pool under explicit fairness and governance constraints.**
 
+[English](README.md) · [简体中文](README.zh-CN.md)
+
 > **Status**: model prototype, math-validated (27 unit tests + 119 stress scenarios + 16 deep checks all pass). **Not production-payroll ready** without historical backtest and a one-quarter shadow run.
 
 ---
