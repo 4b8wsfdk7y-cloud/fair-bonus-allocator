@@ -8,6 +8,40 @@
 
 ---
 
+## TL;DR — for the impatient reader
+
+You have 8 departments with KPIs in different units (revenue ¥, efficiency %, complaint count, etc.) competing for one ¥1M bonus pool. This tool answers: *who gets what, and why?*
+
+**In plain English:**
+
+1. **Translate every KPI into profit yuan.** Sales +¥30M revenue at 8% margin = ¥2.4M profit. Procurement ¥2M cost cut = ¥2M profit. Now they're comparable.
+2. **Set tier lines so "A tier" means the same thing in every department.** Hitting A tier in Sales and A tier in Procurement both close the same share of the company's profit gap.
+3. **Split the pool two ways.** A base pool split by headcount (same people → same base) + a performance pool split by profit contribution (same contribution → same perf bonus).
+4. **Discount uncertain estimates.** If your β is shaky (expert guess, wide CI), you only pay out on the lower bound of what you think was earned. Noisy estimates get clipped to zero — uncertain money is not paid.
+5. **Six release gates must all pass.** If any gate fails, the run is flagged `DO NOT PAY` and exits with code 1.
+
+**The whole thing in 12 lines of R:**
+
+```r
+# Given per-department inputs: beta_hat, se_beta, delta_kpi, rho, quota, lambda, P, gap, h, H
+c_hat     <- beta_hat * delta_kpi              # point estimate of profit contribution
+se_c      <- abs(delta_kpi) * se_beta          # SE propagates linearly
+c_lower   <- c_hat - 1.645 * se_c              # one-sided 95% lower bound
+c_star    <- rho * max(0, c_lower)             # floor at 0, scale by source-quality
+target_d  <- quota * gap                       # this dept's share of profit gap
+a_d       <- c_star / target_d                 # achievement rate
+s_d       <- quota * min(max(a_d, 0), 1.5)     # clipped score
+base_d    <- lambda * P * h / H                # headcount-based base bonus
+perf_d    <- (1 - lambda) * P * s_d / sum(s_d) # contribution-based perf bonus
+bonus_d   <- base_d + perf_d                   # total bonus
+deferred  <- max(P - sum(bonus_d), 0)          # residual set aside
+gates_ok  <- all(bonus_d >= 0) && abs(sum(quota) - 1) < 1e-6  # release gates (simplified)
+```
+
+If you read this and think "okay, that makes sense," the rest of this README is just explaining *why each line is the way it is*. Start with [§2 (Design principle)](#2-design-principle-in-one-page) for the high-level argument, then jump to [§8 (v2 governance)](#8-v2-governance-in-depth) for the statistical details.
+
+---
+
 ## Table of contents
 
 1. [Why this project exists](#1-why-this-project-exists)
@@ -215,9 +249,9 @@ Every KPI's unit must pair with its β such that $\beta \cdot \Delta\mathrm{KPI}
 
 `monte_carlo_profit()` simulates $N$ scenarios by drawing random achievement multipliers $a_d \sim \mathrm{Uniform}(0.8, 1.5)$ for each department, computing the resulting profit, then OLS-regressing simulated profit on each dept's KPI:
 
-$$\mathrm{Profit}^{(s)} = \alpha + \sum_d \hat{\beta}^{\,\mathrm{OLS}}_d \cdot \mathrm{KPI}^{(s)}_d + \varepsilon^{(s)}$$
+$$\mathrm{Profit}^{(s)} = \alpha + \sum_d \hat{\beta}^{\mathrm{OLS}}_d \cdot \mathrm{KPI}^{(s)}_d + \varepsilon^{(s)}$$
 
-The recovered $\hat{\beta}^{\,\mathrm{OLS}}_d$ should match the input $\beta_d$ within <1%. **This is your safety check that the linear model is internally consistent** and that the β values you loaded actually reproduce the profit model you claim to have. If recovery error > 1%, the linear assumption is being violated somewhere in your configuration.
+The recovered $\hat{\beta}^{\mathrm{OLS}}_d$ should match the input $\beta_d$ within <1%. **This is your safety check that the linear model is internally consistent** and that the β values you loaded actually reproduce the profit model you claim to have. If recovery error > 1%, the linear assumption is being violated somewhere in your configuration.
 
 ### 5.5 Profit gap
 
@@ -286,7 +320,7 @@ Constraints:
 
 Splits the pool into two pots:
 
-$$\underbrace{\lambda P}_{\text{base pool}} \text{ split by headcount} \quad \underbrace{(1-\lambda) P}_{\text{perf pool}} \text{ split by } C^{*}_d$$
+$$\underbrace{\lambda P}_{\mathrm{base}} \text{ split by headcount} \quad \underbrace{(1-\lambda) P}_{\mathrm{perf}} \text{ split by } C^{*}_d$$
 
 The base pool enforces "same employees get same base." The perf pool enforces "same contribution gets same perf bonus." Full formulas in [§8](#8-v2-governance-in-depth).
 
@@ -323,21 +357,33 @@ $$q_d = \frac{\beta_d \cdot (\mathrm{KPI}^{\mathrm{stretch}}_d - \mathrm{base}_d
 
 ### 8.2 Confidence-adjusted impact ($C^{*}_d$) — the heart of v2
 
-This is the core statistical machinery. We have a point estimate $\hat{\beta}_d$ with standard error $\mathrm{SE}(\hat{\beta}_d)$. Given an observed KPI delta $\Delta\mathrm{KPI}_d$, the profit contribution estimate is:
+**Plain-English version**: you estimated that "1 yuan of revenue → 0.08 yuan profit" (that's β). But your estimate has noise — maybe it's really 0.06, maybe 0.10. You also saw Sales deliver ¥30M of extra revenue. Naively, that's β × 30M = ¥2.4M of profit. But you're not 95% sure β is really 0.08, so you shouldn't pay bonus on the full ¥2.4M. Instead you compute the **lower bound** of what you're 95% confident was actually earned, clip it to zero if negative, and scale by how much you trust the β source (RCT vs expert guess). That scaled, floored lower bound is $C^{*}_d$ — the amount of profit we're confident was actually contributed. Only that becomes bonus.
+
+**Formal version**: we have a point estimate $\hat{\beta}_d$ with standard error $\mathrm{SE}(\hat{\beta}_d)$. Given an observed KPI delta $\Delta\mathrm{KPI}_d$, the profit contribution point estimate is:
 
 $$\hat{C}_d = \hat{\beta}_d \cdot \Delta\mathrm{KPI}_d$$
 
-Because the profit model is **linear in β**, the standard error propagates linearly:
+Because the profit model is **linear in β**, the standard error propagates linearly (chain rule, one term):
 
 $$\mathrm{SE}(\hat{C}_d) = \left|\frac{\partial \hat{C}_d}{\partial \hat{\beta}_d}\right| \cdot \mathrm{SE}(\hat{\beta}_d) = |\Delta\mathrm{KPI}_d| \cdot \mathrm{SE}(\hat{\beta}_d)$$
 
 We then construct a **one-sided 95% lower confidence bound** on the true contribution:
 
-$$\hat{C}^{\,\mathrm{lower}}_d = \hat{C}_d - 1.645 \cdot \mathrm{SE}(\hat{C}_d) = \hat{\beta}_d \cdot \Delta\mathrm{KPI}_d - 1.645 \cdot |\Delta\mathrm{KPI}_d| \cdot \mathrm{SE}(\hat{\beta}_d)$$
+$$\hat{C}^{\mathrm{lower}}_d = \hat{C}_d - 1.645 \cdot \mathrm{SE}(\hat{C}_d) = \hat{\beta}_d \cdot \Delta\mathrm{KPI}_d - 1.645 \cdot |\Delta\mathrm{KPI}_d| \cdot \mathrm{SE}(\hat{\beta}_d)$$
 
-The lower bound is then **floored at zero** (contribution can't be negative) and **scaled by source-quality weight** $\rho_d$:
+The lower bound is then **floored at zero** (contribution can't be negative) and **scaled by source-quality weight** $\rho_d$. The final value used for bonus attribution:
 
-$$\boxed{C^{*}_d = \rho_d \cdot \max\left(0, \hat{\beta}_d \cdot \Delta\mathrm{KPI}_d - 1.645 \cdot |\Delta\mathrm{KPI}_d| \cdot \mathrm{SE}(\hat{\beta}_d)\right)}$$
+$$C^{*}_d = \rho_d \cdot \max\left(0, \hat{\beta}_d \cdot \Delta\mathrm{KPI}_d - 1.645 \cdot |\Delta\mathrm{KPI}_d| \cdot \mathrm{SE}(\hat{\beta}_d)\right)$$
+
+**Same thing in R** (if you prefer code over math):
+
+```r
+# Per-department confidence-adjusted impact
+c_hat   <- beta_hat * delta_kpi                         # point estimate
+se_c    <- abs(delta_kpi) * se_beta                     # SE via linear propagation
+c_lower <- c_hat - qnorm(0.95) * se_c                   # one-sided 95% lower bound (qnorm = 1.645)
+c_star  <- rho * pmax(0, c_lower)                       # floor at 0, scale by source-quality
+```
 
 ### 8.3 Why one-sided 95%, not two-sided CI?
 
@@ -352,11 +398,12 @@ A **one-sided** 95% lower bound at $\hat{C}_d - 1.645 \cdot \mathrm{SE}(\hat{C}_
 | Strictness | More conservative | Less conservative |
 | Use case | General inference | Asymmetric loss (we only fear overpaying) |
 
-**Why $1.645$?** For $Z \sim \mathcal{N}(0,1)$: $P(Z \leq 1.645) \approx 0.95$. So $P(\hat{C}_d - 1.645 \cdot \mathrm{SE}(\hat{C}_d) \leq C_d) \approx 0.95$ — the lower bound holds with 95% confidence asymptotically by the Central Limit Theorem.
+**Why $1.645$?** For $Z \sim \mathcal{N}(0,1)$: $P(Z \leq 1.645) \approx 0.95$. In R: `qnorm(0.95)` returns `1.6448536`. So $P(\hat{C}_d - 1.645 \cdot \mathrm{SE}(\hat{C}_d) \leq C_d) \approx 0.95$ — the lower bound holds with 95% confidence asymptotically by the Central Limit Theorem.
 
-To tighten to 99% confidence, edit `Z_95_ONE_SIDED` in `v2_allocator.py` to $2.326$. Trade-off: stricter gates → more clipping → larger deferred pool → fewer departments paid.
+To tighten to 99% confidence, edit `Z_95_ONE_SIDED` in `v2_allocator.py` to $2.326$ (i.e. `qnorm(0.99)`). Trade-off: stricter gates → more clipping → larger deferred pool → fewer departments paid.
 
 **Sensitivity example**: at $|\Delta\mathrm{KPI}| = 1000$ and $\mathrm{SE}(\hat{\beta}) = 0.01$, the uncertainty discount is $1.645 \cdot 1000 \cdot 0.01 = 16.45$ profit yuan per unit of $\hat{\beta}$. If $\hat{\beta} \cdot \Delta\mathrm{KPI} < 16.45$, the entire contribution is clipped to zero.
+
 
 ### 8.4 Why ρ as a source-quality weight?
 
@@ -374,9 +421,9 @@ This is a **policy knob**, not a statistical one. It lets the business communica
 
 ### 8.5 Standard error from CI
 
-If you supply a 95% CI $[\beta^{\,\mathrm{lower}}, \beta^{\,\mathrm{upper}}]$ for $\hat{\beta}_d$:
+If you supply a 95% CI $[\beta^{\mathrm{lower}}, \beta^{\mathrm{upper}}]$ for $\hat{\beta}_d$:
 
-$$\mathrm{SE}(\hat{\beta}_d) = \frac{\beta^{\,\mathrm{upper}} - \beta^{\,\mathrm{lower}}}{2 \cdot 1.96}$$
+$$\mathrm{SE}(\hat{\beta}_d) = \frac{\beta^{\mathrm{upper}} - \beta^{\mathrm{lower}}}{2 \cdot 1.96}$$
 
 This follows from the symmetric two-sided CI construction $\hat{\beta} \pm 1.96 \cdot \mathrm{SE}$. If no CI is supplied, $\mathrm{SE}(\hat{\beta}_d) = 0$ and $C^{*}_d$ collapses to $\rho_d \cdot \max(0, \hat{\beta}_d \cdot \Delta\mathrm{KPI}_d)$ — a pure point estimate with no uncertainty discount.
 

@@ -8,6 +8,40 @@
 
 ---
 
+## 给赶时间的人——大白话版
+
+你有 8 个部门，KPI 单位五花八门（营收元、效率 %、客诉件数等），要分一个 ¥1M 的奖金池。这个工具回答的是：*谁拿多少，为什么？*
+
+**用大白话讲：**
+
+1. **把每个 KPI 都翻译成利润元。** 销售 +¥30M 营收，按 8% 利润率 = ¥2.4M 利润。采购降本 ¥2M = ¥2M 利润。现在能放一起比了。
+2. **校准档位线，让"A 档"在每个部门含义相同。** 销售到 A 档和采购到 A 档，闭合的利润缺口份额一模一样。
+3. **奖金池切两半。** 一半按人头分（同人数 → 同基础奖），一半按利润贡献分（同贡献 → 同绩效奖）。
+4. **打折扣处理不靠谱的估计。** 如果 β 是专家估的、置信区间很宽，只按"下界"来发奖金——我们确信挣到的那部分才发。噪声大的估计直接夹到零——**不确定的钱不发**。
+5. **6 道发布闸门必须全过。** 任何一道挂掉，运行标记为 `DO NOT PAY`，退出码 1。
+
+**整个流程用 R 写就 12 行：**
+
+```r
+# 输入：beta_hat（β估计）, se_beta, delta_kpi, rho（来源权重）, quota, lambda, P, gap, h, H
+c_hat     <- beta_hat * delta_kpi              # 利润贡献点估计
+se_c      <- abs(delta_kpi) * se_beta          # SE 线性传播
+c_lower   <- c_hat - 1.645 * se_c              # 单侧 95% 下界
+c_star    <- rho * max(0, c_lower)             # 夹到 ≥0，再乘来源质量
+target_d  <- quota * gap                       # 该部门应闭合的缺口份额
+a_d       <- c_star / target_d                 # 达成率
+s_d       <- quota * min(max(a_d, 0), 1.5)     # 夹断评分
+base_d    <- lambda * P * h / H                # 按人头的基础奖金
+perf_d    <- (1 - lambda) * P * s_d / sum(s_d) # 按贡献的绩效奖金
+bonus_d   <- base_d + perf_d                   # 总奖金
+deferred  <- max(P - sum(bonus_d), 0)          # 残差延迟
+gates_ok  <- all(bonus_d >= 0) && abs(sum(quota) - 1) < 1e-6  # 闸门（简化）
+```
+
+如果你看完觉得"嗯，说得通"，那这份 README 剩下的部分只是在解释*为什么每一行要这么写*。先看 [§2 设计原理](#2-一页纸设计原理) 了解大思路，再看 [§8 v2 治理](#8-v2-治理深入) 看统计细节。
+
+---
+
 ## 目录
 
 1. [项目为什么存在](#1-项目为什么存在)
@@ -215,9 +249,9 @@ $$\log(\mathrm{Profit}) = \log(\mathrm{Profit}_{\mathrm{base}}) + \sum_d \beta_d
 
 `monte_carlo_profit()` 用随机业绩模拟 $N$ 个场景，对每个部门抽取随机达成率 $a_d \sim \mathrm{Uniform}(0.8, 1.5)$，计算相应利润，再用 OLS 把模拟利润对各部门 KPI 回归：
 
-$$\mathrm{Profit}^{(s)} = \alpha + \sum_d \hat{\beta}^{\,\mathrm{OLS}}_d \cdot \mathrm{KPI}^{(s)}_d + \varepsilon^{(s)}$$
+$$\mathrm{Profit}^{(s)} = \alpha + \sum_d \hat{\beta}^{\mathrm{OLS}}_d \cdot \mathrm{KPI}^{(s)}_d + \varepsilon^{(s)}$$
 
-恢复出的 $\hat{\beta}^{\,\mathrm{OLS}}_d$ 应与输入 $\beta_d$ 误差 <1%。**这是确认线性模型内部自洽**、以及你载入的 $\beta$ 确实复现了你声称的利润模型的安全检查。如果恢复误差 >1%，说明配置中某处违反了线性假设。
+恢复出的 $\hat{\beta}^{\mathrm{OLS}}_d$ 应与输入 $\beta_d$ 误差 <1%。**这是确认线性模型内部自洽**、以及你载入的 $\beta$ 确实复现了你声称的利润模型的安全检查。如果恢复误差 >1%，说明配置中某处违反了线性假设。
 
 ### 5.5 利润缺口
 
@@ -286,7 +320,7 @@ $$\mathrm{KS}_d = \frac{V_d}{\mathrm{rounds}_d + 1} \quad (\text{胜者惩罚})$
 
 奖金池切两半：
 
-$$\underbrace{\lambda P}_{\text{基础池}} \text{按人头分} \quad \underbrace{(1-\lambda) P}_{\text{绩效池}} \text{按 } C^{*}_d \text{ 分}$$
+$$\underbrace{\lambda P}_{\mathrm{基础}} \text{按人头分} \quad \underbrace{(1-\lambda) P}_{\mathrm{绩效}} \text{按 } C^{*}_d \text{ 分}$$
 
 基础池执行"同人数拿同基础"。绩效池执行"同贡献拿同绩效"。完整公式见 [§8](#8-v2-治理深入)。
 
@@ -323,21 +357,33 @@ $$q_d = \frac{\beta_d \cdot (\mathrm{KPI}^{\mathrm{stretch}}_d - \mathrm{base}_d
 
 ### 8.2 置信调整贡献（$C^{*}_d$）— v2 的统计核心
 
-这是 v2 统计治理的核心机器。我们有点估计 $\hat{\beta}_d$ 和标准误 $\mathrm{SE}(\hat{\beta}_d)$。给定观测到的 KPI 增量 $\Delta\mathrm{KPI}_d$，利润贡献估计为：
+**大白话版**：你估出"1 元营收 → 0.08 元利润"（这就是 β）。但估计有噪声——可能真是 0.06，也可能是 0.10。你又看到销售多卖了 ¥30M。按 β 算，β × 30M = ¥2.4M 利润。但你不是 95% 确定 β 真是 0.08，所以不能按整 ¥2.4M 发奖金。换个做法：算出"95% 确信真挣到的那部分"的**下界**，若为负就夹到零，再按你对 β 来源的信任程度打折（RCT vs 专家估计）。这个打折过后、夹到非负的下界就是 $C^{*}_d$——我们确信被挣到的利润。只有这部分才转为奖金。
+
+**形式化版**：我们有点估计 $\hat{\beta}_d$ 和标准误 $\mathrm{SE}(\hat{\beta}_d)$。给定观测到的 KPI 增量 $\Delta\mathrm{KPI}_d$，利润贡献点估计为：
 
 $$\hat{C}_d = \hat{\beta}_d \cdot \Delta\mathrm{KPI}_d$$
 
-因为利润模型对 $\beta$ 是**线性**的，标准误线性传播：
+因为利润模型对 $\beta$ 是**线性**的，标准误线性传播（链式法则，单一项）：
 
 $$\mathrm{SE}(\hat{C}_d) = \left|\frac{\partial \hat{C}_d}{\partial \hat{\beta}_d}\right| \cdot \mathrm{SE}(\hat{\beta}_d) = |\Delta\mathrm{KPI}_d| \cdot \mathrm{SE}(\hat{\beta}_d)$$
 
 然后构造真实贡献的**单侧 95% 下置信界**：
 
-$$\hat{C}^{\,\mathrm{lower}}_d = \hat{C}_d - 1.645 \cdot \mathrm{SE}(\hat{C}_d) = \hat{\beta}_d \cdot \Delta\mathrm{KPI}_d - 1.645 \cdot |\Delta\mathrm{KPI}_d| \cdot \mathrm{SE}(\hat{\beta}_d)$$
+$$\hat{C}^{\mathrm{lower}}_d = \hat{C}_d - 1.645 \cdot \mathrm{SE}(\hat{C}_d) = \hat{\beta}_d \cdot \Delta\mathrm{KPI}_d - 1.645 \cdot |\Delta\mathrm{KPI}_d| \cdot \mathrm{SE}(\hat{\beta}_d)$$
 
-下界先**夹到 0**（贡献不能为负），再**乘以来源质量权重** $\rho_d$：
+下界先**夹到 0**（贡献不能为负），再**乘以来源质量权重** $\rho_d$。最终用于奖金归因的值：
 
-$$\boxed{C^{*}_d = \rho_d \cdot \max\left(0, \hat{\beta}_d \cdot \Delta\mathrm{KPI}_d - 1.645 \cdot |\Delta\mathrm{KPI}_d| \cdot \mathrm{SE}(\hat{\beta}_d)\right)}$$
+$$C^{*}_d = \rho_d \cdot \max\left(0, \hat{\beta}_d \cdot \Delta\mathrm{KPI}_d - 1.645 \cdot |\Delta\mathrm{KPI}_d| \cdot \mathrm{SE}(\hat{\beta}_d)\right)$$
+
+**同样的事用 R 写**（如果你更熟代码不熟公式）：
+
+```r
+# 每部门的置信调整贡献
+c_hat   <- beta_hat * delta_kpi                         # 点估计
+se_c    <- abs(delta_kpi) * se_beta                     # SE 线性传播
+c_lower <- c_hat - qnorm(0.95) * se_c                   # 单侧 95% 下界（qnorm = 1.645）
+c_star  <- rho * pmax(0, c_lower)                       # 夹到 ≥0，乘来源质量
+```
 
 ### 8.3 为什么用单侧 95%，不用双侧 CI？
 
@@ -352,9 +398,9 @@ $\hat{C}_d$ 的双侧 95% CI 是 $\hat{C}_d \pm 1.96 \cdot \mathrm{SE}(\hat{C}_d
 | 严格程度 | 更保守 | 较不保守 |
 | 适用场景 | 通用推断 | 非对称损失（我们只怕多发） |
 
-**为什么是 1.645？** 对 $Z \sim \mathcal{N}(0,1)$：$P(Z \leq 1.645) \approx 0.95$。所以 $P(\hat{C}_d - 1.645 \cdot \mathrm{SE}(\hat{C}_d) \leq C_d) \approx 0.95$——下界以 95% 置信度成立（渐近意义下，由 CLT 保证）。
+**为什么是 1.645？** 对 $Z \sim \mathcal{N}(0,1)$：$P(Z \leq 1.645) \approx 0.95$。R 里：`qnorm(0.95)` 返回 `1.6448536`。所以 $P(\hat{C}_d - 1.645 \cdot \mathrm{SE}(\hat{C}_d) \leq C_d) \approx 0.95$——下界以 95% 置信度成立（渐近意义下，由 CLT 保证）。
 
-要改成 99% 置信，把 `v2_allocator.py` 中 `Z_95_ONE_SIDED` 改成 $2.326$。权衡：更严 → 更多夹零 → 更大延迟池 → 更少部门拿到钱。
+要改成 99% 置信，把 `v2_allocator.py` 中 `Z_95_ONE_SIDED` 改成 $2.326$（即 `qnorm(0.99)`）。权衡：更严 → 更多夹零 → 更大延迟池 → 更少部门拿到钱。
 
 **敏感度示例**：当 $|\Delta\mathrm{KPI}| = 1000$、$\mathrm{SE}(\hat{\beta}) = 0.01$ 时，不确定性折价为 $1.645 \cdot 1000 \cdot 0.01 = 16.45$ 元/$\hat{\beta}$ 单位。若 $\hat{\beta} \cdot \Delta\mathrm{KPI} < 16.45$，整笔贡献被夹到零。
 
@@ -374,9 +420,9 @@ $\rho_d \in [0,1]$（`beta_confidence_weight`）是对 $\hat{\beta}_d$ 信任度
 
 ### 8.5 从 CI 反推标准误
 
-若你提供 $\hat{\beta}_d$ 的 95% CI $[\beta^{\,\mathrm{lower}}, \beta^{\,\mathrm{upper}}]$：
+若你提供 $\hat{\beta}_d$ 的 95% CI $[\beta^{\mathrm{lower}}, \beta^{\mathrm{upper}}]$：
 
-$$\mathrm{SE}(\hat{\beta}_d) = \frac{\beta^{\,\mathrm{upper}} - \beta^{\,\mathrm{lower}}}{2 \cdot 1.96}$$
+$$\mathrm{SE}(\hat{\beta}_d) = \frac{\beta^{\mathrm{upper}} - \beta^{\mathrm{lower}}}{2 \cdot 1.96}$$
 
 由对称双侧 CI 构造 $\hat{\beta} \pm 1.96 \cdot \mathrm{SE}$ 反推。若不提供 CI，$\mathrm{SE}(\hat{\beta}_d) = 0$，$C^{*}_d$ 退化为 $\rho_d \cdot \max(0, \hat{\beta}_d \cdot \Delta\mathrm{KPI}_d)$——纯点估计，无不确定性折价。
 
