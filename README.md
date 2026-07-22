@@ -18,13 +18,14 @@
 6. [Layer 2 · Tier calibration](#6-layer-2--tier-calibration)
 7. [Layer 3 · Allocation (v1 & v2)](#7-layer-3--allocation-v1--v2)
 8. [v2 governance in depth](#8-v2-governance-in-depth)
-9. [Release gates](#9-release-gates)
-10. [Configuration reference](#10-configuration-reference)
-11. [CLI reference](#11-cli-reference)
-12. [Validation & stress testing](#12-validation--stress-testing)
-13. [Road to production](#13-road-to-production)
-14. [What's NOT here](#14-whats-not-here)
-15. [License & caveats](#15-license--caveats)
+9. [Statistical foundations](#9-statistical-foundations)
+10. [Release gates](#10-release-gates)
+11. [Configuration reference](#11-configuration-reference)
+12. [CLI reference](#12-cli-reference)
+13. [Validation & stress testing](#13-validation--stress-testing)
+14. [Road to production](#14-road-to-production)
+15. [What's NOT here](#15-whats-not-here)
+16. [License & caveats](#16-license--caveats)
 
 ---
 
@@ -45,7 +46,7 @@ The classic CFO/HR problem: 8 departments have KPIs in **different units**.
 
 How do you let "Sales +¥30M revenue" and "Procurement ¥2M cost reduction" compete under the same rule for a ¥1M bonus pool? You can't compare raw KPIs — you have to translate them first.
 
-**This project's answer**: translate every KPI to **profit contribution** using the β elasticity (`β × ΔKPI = profit yuan`), then allocate under explicit fairness rules. This makes "who earned what" computable, auditable, and debatable on the same scale.
+**This project's answer**: translate every KPI to **profit contribution** using the β elasticity ($\beta \cdot \Delta\text{KPI} = \text{profit yuan}$), then allocate under explicit fairness rules. This makes "who earned what" computable, auditable, and debatable on the same scale.
 
 ---
 
@@ -57,14 +58,14 @@ Three kinds of unfairness sneak into bonus pools:
 
 1. **Apples-vs-oranges**: Sales gets more because revenue numbers look bigger, even when Procurement saved more profit.
 2. **Moving goalposts**: Department stretch KPIs are set arbitrarily, so "A tier" in one dept ≠ "A tier" in another.
-3. **Fake precision**: β is estimated from limited data, but the allocator treats it as truth — noise becomes money.
+3. **Fake precision**: $\hat\beta$ is estimated from limited data, but the allocator treats it as truth — noise becomes money.
 
 ### The three-step pipeline
 
 ```
 Heterogeneous KPIs
     │
-    ▼  Layer 1: β × ΔKPI = profit yuan
+    ▼  Layer 1: β · ΔKPI = profit yuan
 Common currency (profit contribution)
     │
     ▼  Layer 2: calibrate tier lines so equal tier = equal contribution
@@ -78,23 +79,21 @@ Bonus per department
 
 | Level | Rule | Where enforced |
 |---|---|---|
-| **L1 — Equal contribution** | Same ΔKPI × β → same profit yuan | Layer 1 (math identity) |
+| **L1 — Equal contribution** | Same $\Delta\text{KPI} \cdot \beta$ → same profit yuan | Layer 1 (math identity) |
 | **L2 — Equal tier** | Hitting "A tier" in any dept closes the same share of profit gap | Layer 2 (calibration) |
 | **L3 — Equal bonus** | Same contribution → same bonus; same headcount → same base | Layer 3 (v2 allocator) |
 
 ### Confidence-aware
 
-β̂ is an **estimate**, not truth. v2 uses a one-sided 95% lower bound:
+$\hat\beta$ is an **estimate**, not truth. v2 uses a one-sided 95% lower bound:
 
-```
-C_d* = ρ_d × max(0, β̂·ΔKPI − 1.645 × |ΔKPI| × SE(β̂))
-```
+$$C_d^{\,*} \;=\; \rho_d \cdot \max\!\Big(0,\;\hat\beta_d \cdot \Delta\text{KPI}_d \;-\; z_{0.95}\cdot|\Delta\text{KPI}_d|\cdot\text{SE}(\hat\beta_d)\Big)$$
 
-Only profit contribution we're confident was actually earned becomes bonus. Noisy estimates get clipped to zero rather than paid out.
+where $z_{0.95} = 1.645$ is the one-sided 95% z-score. Only profit contribution we're confident was actually earned becomes bonus. Noisy estimates get clipped to zero rather than paid out.
 
 ### Launch threshold
 
-**6 release gates** must all pass before any payout. If any fails, the run is marked `DO NOT PAY`. See [§9](#9-release-gates).
+**6 release gates** must all pass before any payout. If any fails, the run is marked `DO NOT PAY`. See [§10](#10-release-gates).
 
 ---
 
@@ -102,12 +101,12 @@ Only profit contribution we're confident was actually earned becomes bonus. Nois
 
 ```
 Layer 1 · Sensitivity modeling      [sensitivity.py]
-    Profit = Profit_baseline + Σ β_d × (KPI_d − baseline_d)
+    Profit = Profit_baseline + Σ_d  β_d · (KPI_d − baseline_d)
     Validates via Monte Carlo + OLS regression (recovers β within <1%).
 
 Layer 2 · Tier calibration          [tiers.py]
-    β_d × (KPI_d^A − baseline) = θ_A × profit_gap
-    β_d × (KPI_d^S − baseline) = θ_S × profit_gap
+    β_d · (KPI_d^A − baseline) = θ_A · profit_gap
+    β_d · (KPI_d^S − baseline) = θ_S · profit_gap
     → every tier transition represents the same ¥ contribution
 
 Layer 3 · Allocation
@@ -179,36 +178,36 @@ all gates pass: YES
 
 The simplest profit model is linear in KPI deltas:
 
-```
-Profit = Profit_baseline + Σ_d β_d × (KPI_d − baseline_d)
-```
+$$\text{Profit} \;=\; \text{Profit}_{\text{baseline}} \;+\; \sum_d \beta_d \cdot \big(\text{KPI}_d - \text{baseline}_d\big)$$
 
 A log-linear form is also supported:
 
-```
-log(Profit) = log(Profit_baseline) + Σ_d β_d × log(KPI_d / baseline_d)
-```
+$$\log(\text{Profit}) \;=\; \log(\text{Profit}_{\text{baseline}}) \;+\; \sum_d \beta_d \cdot \log\!\left(\frac{\text{KPI}_d}{\text{baseline}_d}\right)$$
+
+The two forms agree to first order for small KPI perturbations; the linear form is the default because its coefficients are directly interpretable as "profit per unit KPI."
 
 ### Unit convention
 
-Every KPI's unit must pair with its β such that `β × ΔKPI = profit delta (yuan)`. Example:
+Every KPI's unit must pair with its $\beta$ such that $\beta \cdot \Delta\text{KPI} = \text{profit delta (yuan)}$. Example:
 
-| Department | KPI unit | β | Meaning |
+| Department | KPI unit | $\beta$ | Meaning |
 |---|---|---|---|
 | Sales | yuan revenue | 0.08 | each ¥1 revenue → ¥0.08 profit |
 | Procurement | yuan cost reduction | 1.0 | direct pass-through |
 | Manufacturing | efficiency % | 250,000 | each 1% → ¥250k profit |
 | Quality | complaint count | 100,000 | each avoided complaint → ¥100k |
 
-### β validation
+### β validation — Monte Carlo + OLS
 
-`monte_carlo_profit()` simulates N scenarios with random achievements, then OLS-regresses simulated profit on each dept's KPI. The recovered β̂ should match input β within <1%. This is your safety check that the linear model is internally consistent.
+`monte_carlo_profit()` simulates $N$ scenarios by drawing random achievement multipliers $a_d \sim \text{Uniform}(0.8, 1.5)$ for each department, computing the resulting profit, then OLS-regressing simulated profit on each dept's KPI:
+
+$$\text{Profit}^{(s)} \;=\; \alpha \;+\; \sum_d \hat\beta_d^{\,\text{OLS}} \cdot \text{KPI}_d^{(s)} \;+\; \varepsilon^{(s)}$$
+
+The recovered $\hat\beta_d^{\,\text{OLS}}$ should match the input $\beta_d$ within <1%. This is your safety check that the linear model is internally consistent and that the $\beta$ values you loaded actually reproduce the profit model you claim to have.
 
 ### Profit gap
 
-```
-profit_gap = profit_target − profit_baseline
-```
+$$\text{profit\_gap} \;=\; \text{profit\_target} \;-\; \text{profit\_baseline}$$
 
 This is the "gap" the bonus pool is meant to motivate departments to close. It drives tier calibration in Layer 2.
 
@@ -218,30 +217,35 @@ This is the "gap" the bonus pool is meant to motivate departments to close. It d
 
 **File**: `tiers.py`
 
-Each department gets two tier lines (A and S) above baseline B:
+Each department gets two tier lines (A and S) above baseline B. The calibration rule sets the tier line so that hitting it closes a fixed **share** of the profit gap:
 
-```
-KPI_d^A = KPI_d^B + θ_A × profit_gap / β_d
-KPI_d^S = KPI_d^B + θ_S × profit_gap / β_d
-```
+$$\beta_d \cdot \big(\text{KPI}_d^{A} - \text{baseline}_d\big) \;=\; \theta_A \cdot \text{profit\_gap}$$
+
+$$\beta_d \cdot \big(\text{KPI}_d^{S} - \text{baseline}_d\big) \;=\; \theta_S \cdot \text{profit\_gap}$$
+
+Solving for the KPI tier lines:
+
+$$\text{KPI}_d^{A} \;=\; \text{baseline}_d \;+\; \frac{\theta_A \cdot \text{profit\_gap}}{\beta_d}$$
+
+$$\text{KPI}_d^{S} \;=\; \text{baseline}_d \;+\; \frac{\theta_S \cdot \text{profit\_gap}}{\beta_d}$$
 
 ### Why this works
 
-- **Low-β departments get wide tier bands.** They must swing further in KPI to earn the same bonus weight.
-- **High-β departments get narrow tier bands.** Small KPI moves → large profit impact → small tier distance.
+- **Low-$\beta$ departments get wide tier bands.** They must swing further in KPI to earn the same bonus weight.
+- **High-$\beta$ departments get narrow tier bands.** Small KPI moves → large profit impact → small tier distance.
 - Every tier transition represents the **same ¥ contribution** to closing the profit gap. This is the mathematical core of cross-department fairness.
 
 ### Defaults
 
 | Param | Default | Meaning |
 |---|---|---|
-| `theta_a` | 0.15 | A tier closes 15% of profit gap |
-| `theta_s` | 0.30 | S tier closes 30% of profit gap |
-| Cap rule | `min(kpi_s, kpi_stretch)` | Tier lines never exceed user-defined stretch |
+| $\theta_A$ | 0.15 | A tier closes 15% of profit gap |
+| $\theta_S$ | 0.30 | S tier closes 30% of profit gap |
+| Cap rule | $\min(\text{KPI}^S, \text{KPI}^{\text{stretch}})$ | Tier lines never exceed user-defined stretch |
 
 ### Reachability
 
-A department whose `β × (kpi_stretch − kpi_baseline) < θ_A × profit_gap` **cannot reach A tier**, no matter how hard they perform. The v2 audit flags this so you can renegotiate quotas honestly (see [§8](#8-v2-governance-in-depth)).
+A department whose $\beta_d \cdot (\text{KPI}_d^{\text{stretch}} - \text{baseline}_d) < \theta_A \cdot \text{profit\_gap}$ **cannot reach A tier**, no matter how hard they perform. The v2 audit flags this so you can renegotiate quotas honestly (see [§8](#8-v2-governance-in-depth)).
 
 ---
 
@@ -251,17 +255,16 @@ A department whose `β × (kpi_stretch − kpi_baseline) < θ_A × profit_gap` *
 
 **File**: `allocator.py`
 
-The pool is sliced into N divisions (default 1000). Each round, the department with the highest marginal value/cost ratio wins one division.
+The pool is sliced into $N$ divisions (default 1000). Each round, the department with the highest marginal value/cost ratio wins one division.
 
-```
-Value:       V_d = w_d × ln(1 + (s'_d + division) / target_d)
-Knapsack:    KS_d = V_d / (rounds_d + 1)        ← winner penalty
-```
+$$V_d \;=\; w_d \cdot \ln\!\left(1 + \frac{s_d' + \text{division}}{\text{target}_d}\right)$$
+
+$$\text{KS}_d \;=\; \frac{V_d}{\text{rounds}_d + 1} \qquad \text{(winner penalty)}$$
 
 Constraints:
-- Floor: every department gets at least `min_pool_share × pool_total`
-- Cap: scales linearly with achievement, clipped at S-tier allocation
-- Ineligible: departments below baseline (ach < 1.0) get floor only
+- **Floor**: every department gets at least $\text{min\_pool\_share} \cdot P_{\text{total}}$
+- **Cap**: scales linearly with achievement, clipped at S-tier allocation
+- **Ineligible**: departments below baseline ($a_d < 1.0$) get floor only
 
 ### v2 — Base + perf pool
 
@@ -269,12 +272,9 @@ Constraints:
 
 Splits the pool into two pots:
 
-```
-Base pool (λ P)  : split by headcount       → "same employees get same base"
-Perf pool ((1−λ)P): split by c_star         → "same contribution gets same perf bonus"
-```
+$$\underbrace{\lambda P}_{\text{base pool}} \;\text{split by headcount} \qquad \underbrace{(1-\lambda) P}_{\text{perf pool}} \;\text{split by } C_d^{\,*}$$
 
-Full formulas in [§8](#8-v2-governance-in-depth).
+The base pool enforces "same employees get same base." The perf pool enforces "same contribution gets same perf bonus." Full formulas in [§8](#8-v2-governance-in-depth).
 
 ---
 
@@ -290,58 +290,102 @@ v1 was math-correct but had three real-world flaws Codex's review forced us to f
 
 ### 8.1 Responsibility shares (`quota`)
 
-Each department declares `q_d` such that `Σ q_d = 1`. The interpretation: "if every department hits A tier, exactly one profit gap is closed — not N × θ."
+Each department declares $q_d$ such that $\sum_d q_d = 1$. The interpretation: "if every department hits A tier, exactly one profit gap is closed — not $N \cdot \theta$."
+
+$$\sum_{d=1}^{N} q_d \;=\; 1$$
 
 - If all departments set `quota`, config validates sum = 1 (else raises).
-- If no department sets `quota`, it's derived from stretch_impact share.
+- If no department sets `quota`, it's derived from stretch_impact share:
 
-### 8.2 Confidence-adjusted impact (`c_star`)
+$$q_d \;=\; \frac{\beta_d \cdot (\text{KPI}_d^{\text{stretch}} - \text{baseline}_d)}{\sum_j \beta_j \cdot (\text{KPI}_j^{\text{stretch}} - \text{baseline}_j)}$$
 
-```
-ΔKPI_d    = actual KPI change from baseline
-ĉ_hat     = β̂_d × ΔKPI_d                    ← point estimate
-SE(ĉ)     = |ΔKPI_d| × SE(β̂_d)              ← linear model variance
-ĉ_lower   = ĉ_hat − 1.645 × SE(ĉ)           ← one-sided 95% lower bound
-C_d*      = ρ_d × max(0, ĉ_lower)           ← quality-adjusted, floored at 0
-```
+### 8.2 Confidence-adjusted impact ($C_d^{\,*}$)
 
-- **1.645** is the z-score for one-sided 95% confidence.
-- **ρ_d ∈ [0,1]** (`beta_confidence_weight`) is source-quality: RCT=1.0, regression=0.7, expert=0.3.
-- The `max(0, …)` clips noisy estimates to zero — uncertain money is **not paid out**.
+This is the heart of v2's statistical governance. We have a point estimate $\hat\beta_d$ with standard error $\text{SE}(\hat\beta_d)$. Given an observed KPI delta $\Delta\text{KPI}_d$, the profit contribution estimate is:
 
-### 8.3 Score and perf bonus
+$$\hat C_d \;=\; \hat\beta_d \cdot \Delta\text{KPI}_d$$
 
-```
-target_d  = q_d × profit_gap                 ← this dept's share of the gap
-a_d       = C_d* / target_d                  ← achievement rate
-s_d       = q_d × min(max(a_d, 0), a_max)    ← clipped score (a_max default 1.5)
-PerfBonus_d = (1−λ) P × s_d / Σ s_j
-```
+Because the profit model is **linear in $\beta$**, the standard error propagates linearly:
 
-The `a_max` clip prevents one department with extreme achievement from dominating the perf pool.
+$$\text{SE}(\hat C_d) \;=\; \left|\frac{\partial \hat C_d}{\partial \hat\beta_d}\right| \cdot \text{SE}(\hat\beta_d) \;=\; |\Delta\text{KPI}_d| \cdot \text{SE}(\hat\beta_d)$$
 
-### 8.4 Base bonus
+We then construct a **one-sided 95% lower confidence bound** on the true contribution:
 
-```
-BaseBonus_d = λ P × h_d / H                  ← h_d = headcount, H = total
-```
+$$\hat C_d^{\,\text{lower}} \;=\; \hat C_d \;-\; z_{0.95} \cdot \text{SE}(\hat C_d) \;=\; \hat\beta_d \cdot \Delta\text{KPI}_d \;-\; 1.645 \cdot |\Delta\text{KPI}_d| \cdot \text{SE}(\hat\beta_d)$$
 
-Pure headcount split. Same number of bodies → same base bonus, regardless of dept.
+**Why one-sided?** We're willing to tolerate upside surprise (true contribution higher than estimated) but not downside surprise (we paid out money that wasn't actually earned). A two-sided CI would be too conservative; a one-sided lower bound at 95% confidence means: *if the model is correct, the true contribution exceeds $\hat C_d^{\,\text{lower}}$ with probability 0.95.*
 
-### 8.5 Cap and overflow
+The lower bound is then **floored at zero** (you can't have negative contribution) and **scaled by source-quality weight** $\rho_d$:
 
-If a cap is set (`caps={dept: yuan}`) and a department's bonus exceeds it:
-1. Clip to cap, route excess to remaining departments proportional to `s_d`.
-2. Iterate up to 10 times (cascading redistribution).
+$$\boxed{\;C_d^{\,*} \;=\; \rho_d \cdot \max\!\Big(0,\;\hat\beta_d \cdot \Delta\text{KPI}_d \;-\; 1.645 \cdot |\Delta\text{KPI}_d| \cdot \text{SE}(\hat\beta_d)\Big)\;}$$
+
+where $\rho_d \in [0,1]$ (`beta_confidence_weight`) is source-quality:
+
+| Source | Suggested $\rho_d$ |
+|---|---|
+| Randomized controlled trial | 1.0 |
+| Regression on historical data | 0.7 |
+| Bridge model (accounting identity) | 0.9 |
+| Industry benchmark | 0.5 |
+| Expert estimate | 0.3 |
+
+The `max(0, \ldots)` clips noisy estimates to zero — **uncertain money is not paid out**.
+
+### 8.3 Standard error from CI
+
+If you supply a 95% CI $[\beta^{\,\text{lower}}, \beta^{\,\text{upper}}]$ for $\hat\beta_d$:
+
+$$\text{SE}(\hat\beta_d) \;=\; \frac{\beta^{\,\text{upper}} - \beta^{\,\text{lower}}}{2 \cdot 1.96}$$
+
+This follows from the symmetric two-sided CI construction $\hat\beta \pm 1.96 \cdot \text{SE}$. If no CI is supplied, $\text{SE}(\hat\beta_d) = 0$ and $C_d^{\,*}$ collapses to $\rho_d \cdot \max(0, \hat\beta_d \cdot \Delta\text{KPI}_d)$ — a pure point estimate with no uncertainty discount.
+
+### 8.4 Score and perf bonus
+
+Each department's "target" is its quota share of the profit gap:
+
+$$\text{target}_d \;=\; q_d \cdot \text{profit\_gap}$$
+
+The achievement rate is the ratio of confidence-adjusted contribution to target:
+
+$$a_d \;=\; \frac{C_d^{\,*}}{\text{target}_d}$$
+
+The score is the achievement rate clipped to $[0, a_{\max}]$ and reweighted by quota (so a high-achievement but low-quota department can still only claim its share):
+
+$$s_d \;=\; q_d \cdot \min\!\big(\max(a_d,\,0),\;a_{\max}\big)$$
+
+The perf bonus is the perf pool allocated proportional to $s_d$:
+
+$$\text{PerfBonus}_d \;=\; (1-\lambda) \cdot P \cdot \frac{s_d}{\sum_j s_j}$$
+
+The $a_{\max}$ clip (default 1.5) prevents one department with extreme achievement from dominating the perf pool.
+
+### 8.5 Base bonus
+
+$$\text{BaseBonus}_d \;=\; \lambda \cdot P \cdot \frac{h_d}{H}$$
+
+where $h_d$ is department headcount and $H = \sum_j h_j$ is total headcount. Pure headcount split — same number of bodies → same base bonus, regardless of dept.
+
+### 8.6 Total bonus and caps
+
+$$\text{Bonus}_d \;=\; \text{BaseBonus}_d + \text{PerfBonus}_d$$
+
+Optional per-department caps trigger cascading redistribution:
+
+1. If $\text{Bonus}_d > \text{cap}_d$: clip to cap, route excess to remaining departments proportional to $s_d$.
+2. Iterate up to 10 times (bounded to prevent infinite loops).
 3. If everything is capped or zero-scored, residual goes to deferred pool.
 
-### 8.6 Deferred pool
+### 8.7 Deferred pool
 
-When `deferred_pool_enabled=true` (default), unallocated residual is **deferred** (set aside for management disposition) rather than force-distributed. This is safer — paying out the full pool at any cost can create perverse incentives.
+When `deferred_pool_enabled=true` (default), unallocated residual is **deferred** (set aside for management disposition) rather than force-distributed:
 
-### 8.7 Reachability audit
+$$\text{deferred} \;=\; \max\!\Big(P \;-\; \sum_d \text{Bonus}_d,\;0\Big)$$
 
-**`cli audit example_config.yaml`** prints a table:
+This is safer — paying out the full pool at any cost can create perverse incentives.
+
+### 8.8 Reachability audit
+
+**`cli audit example_config.yaml`** prints:
 
 ```
 department    stretch_impact  a_target_profit  can_reach_a  can_reach_s
@@ -353,9 +397,83 @@ If `can_reach_a=False`, that department cannot hit A tier even at full stretch. 
 
 ---
 
-## 9. Release gates
+## 9. Statistical foundations
 
-`six` boolean checks. **All must be `True`** before any payout.
+This section makes the math and statistics explicit. Read it before trusting any payout.
+
+### 9.1 The linear profit model and its assumptions
+
+We assume:
+
+$$\text{Profit}(\mathbf{x}) \;=\; \text{Profit}_0 \;+\; \sum_{d=1}^{N} \beta_d \cdot (x_d - x_d^{\,0}) \;+\; \varepsilon$$
+
+where $\mathbf{x} = (x_1, \ldots, x_N)$ is the vector of department KPIs, $\mathbf{x}^{\,0}$ is the baseline, and $\varepsilon$ is an unmodeled residual.
+
+**Key assumptions:**
+
+1. **Linearity**: marginal profit per unit KPI is constant within the operating range. Validated by the Monte Carlo + OLS recovery test (§5).
+2. **Additivity**: departments don't interact. Sales revenue and Manufacturing efficiency contribute independently. This breaks down when departments compete for the same resources (e.g., Sales selling capacity-constrained output).
+3. **$\beta$ is constant in time**: the elasticity you measured last quarter still holds this quarter. Backtest this before paying.
+4. **$\hat\beta$ is unbiased**: OLS gives an unbiased estimate under the Gauss-Markov conditions (exogeneity, no perfect multicollinearity, homoscedasticity). For time-series or panel data, use HAC or cluster-robust SE.
+
+### 9.2 Why one-sided 95% lower bound, not two-sided CI
+
+A two-sided 95% CI on $\hat C_d$ would be $\hat C_d \pm 1.96 \cdot \text{SE}(\hat C_d)$. Using the lower bound as the bonus basis means we pay out only when we're 97.5% confident the contribution is at least that large (because the lower bound itself is at the 2.5th percentile of the sampling distribution).
+
+A **one-sided** 95% lower bound at $\hat C_d - 1.645 \cdot \text{SE}(\hat C_d)$ means: *the true contribution exceeds this value with probability 0.95.* We accept a 5% chance that we've overestimated the contribution; we don't care about the symmetric upper-tail risk because over-performance is not a financial risk to the firm.
+
+| | Two-sided 95% CI | One-sided 95% lower bound |
+|---|---|---|
+| z-score | 1.96 | 1.645 |
+| Confidence that $C \geq \text{bound}$ | 97.5% | 95% |
+| Strictness | More conservative | Less conservative |
+| Use case | General inference | Asymmetric loss (we only fear overpaying) |
+
+**Sensitivity**: at $|\Delta\text{KPI}| = 1000$ and $\text{SE}(\hat\beta) = 0.01$, the uncertainty discount is $1.645 \cdot 1000 \cdot 0.01 = 16.45$ profit yuan per unit of $\hat\beta$. If $\hat\beta \cdot \Delta\text{KPI} < 16.45$, the entire contribution is clipped to zero.
+
+### 9.3 Why $z_{0.95} = 1.645$?
+
+For a standard normal $Z \sim \mathcal{N}(0,1)$:
+
+$$P(Z \leq 1.645) \;\approx\; 0.95$$
+
+So $P\!\big(\hat C_d - 1.645 \cdot \text{SE}(\hat C_d) \;\leq\; C_d\big) \;\approx\; 0.95$ — the lower bound holds with 95% confidence (asymptotically, by the CLT, for $\hat\beta$ estimated from enough data).
+
+If you want a stricter gate (e.g., 99% confidence), use $z_{0.99} = 2.326$ by editing `Z_95_ONE_SIDED` in `v2_allocator.py`. The trade-off: stricter gates → more clipping → larger deferred pool → fewer departments paid.
+
+### 9.4 Why $\rho_d \in [0,1]$ source-quality weight?
+
+$\rho_d$ is a **Bayesian-style prior** on how much to trust $\hat\beta_d$. It multiplies the entire $C_d^{\,*}$ after the lower bound is applied. Rationale:
+
+- $\rho_d = 1.0$: "I trust this $\hat\beta_d$ fully. The lower bound alone is enough discounting."
+- $\rho_d = 0.7$: "I trust this regression estimate, but there might be unmodeled confounders. Discount 30%."
+- $\rho_d = 0.3$: "This is an expert guess. Discount 70% — most of the apparent contribution shouldn't be paid out."
+
+This is a **decision-theoretic** knob, not a statistical one. It lets the business communicate "this $\beta$ is shaky" without throwing the estimate away entirely.
+
+### 9.5 Why quota sums to 1?
+
+The quota system encodes the **responsibility allocation**: "Department $d$ is responsible for $q_d$ share of the profit gap." Without this, the v1 model implicitly assumed every department was responsible for the *entire* gap (sum of $\theta$ across depts could exceed 1, making "everyone at A tier" over-close the gap).
+
+With $\sum q_d = 1$:
+
+- If every department hits A tier, exactly one profit gap is closed (assuming $\theta_A \cdot q_d$ replaces $\theta_A$ in the tier equation).
+- "Everyone hits A tier" is internally consistent with the profit target.
+- Quota is a **negotiated** quantity, not a measured one. The model surfaces the trade-off; humans resolve it.
+
+### 9.6 Determinism and reproducibility
+
+`allocate_v2()` is a pure function of `(config, sens, achievements, caps)`. Given the same inputs, it returns byte-identical outputs (verified by the long-run stress test, §13). This is a hard requirement for audit — if a payout can't be reproduced, it can't be defended.
+
+### 9.7 What the release gates actually check
+
+See [§10](#10-release-gates). Each gate is a single boolean derived from the output DataFrame. They are **necessary, not sufficient** — passing all 6 gates means the run is internally consistent; it does not mean the $\beta$ values are correct or the model is appropriate for your business.
+
+---
+
+## 10. Release gates
+
+Six boolean checks. **All must be `True`** before any payout.
 
 ```python
 {
@@ -368,11 +486,20 @@ If `can_reach_a=False`, that department cannot hit A tier even at full stretch. 
 }
 ```
 
+| Gate | What it catches |
+|---|---|
+| `pool_utilization_90_to_100` | allocator bug (under/over-allocation), misconfigured deferred pool |
+| `no_nan_bonus` | numerical blowup (e.g., $\hat\beta = \infty$) |
+| `no_negative_bonus` | floor/cap interaction bug |
+| `achievers_have_nonneg_c_star` | CI wider than $\hat\beta$ for an achiever → clipping logic failure |
+| `quotas_sum_to_one` | config validation bypassed or float drift |
+| `monotonic_in_c_star_within_quota` | "same contribution → same bonus" promise violated |
+
 If any gate is `False`, CLI exits with code 1 and prints `all gates pass: NO — DO NOT PAY`.
 
 ---
 
-## 10. Configuration reference
+## 11. Configuration reference
 
 See `example_config.yaml` for a fully documented example. Key fields:
 
@@ -397,12 +524,12 @@ See `example_config.yaml` for a fully documented example. Key fields:
 | `name` | str | required | Department identifier |
 | `kpi_baseline` | float | required | 100% target KPI |
 | `kpi_stretch` | float | required | S-tier stretch KPI (cap) |
-| `beta` | float | required | Profit elasticity (`β × ΔKPI = profit yuan`) |
+| `beta` | float | required | Profit elasticity ($\beta \cdot \Delta\text{KPI} = \text{profit yuan}$) |
 | `headcount` | int | 1 | People in dept (drives v2 base pool) |
 | `base_bonus` | float | 0.0 | v1 fixed B-tier bonus |
 | `quota` | float | None | v2 responsibility share (all-or-none, sum=1) |
-| `beta_ci_lower`, `beta_ci_upper` | float | None | 95% CI bounds for β̂; SE=0 if omitted |
-| `beta_confidence_weight` | float | 1.0 | ρ ∈ [0,1], confidence in β estimate |
+| `beta_ci_lower`, `beta_ci_upper` | float | None | 95% CI bounds for $\hat\beta$; SE=0 if omitted |
+| `beta_confidence_weight` | float | 1.0 | $\rho \in [0,1]$, confidence in β estimate |
 | `beta_source` | str | "unspecified" | Provenance: regression / bridge_model / expert_estimate / industry_benchmark |
 | `note` | str | "" | Free-form stakeholder note |
 
@@ -417,7 +544,7 @@ See `example_config.yaml` for a fully documented example. Key fields:
 
 ---
 
-## 11. CLI reference
+## 12. CLI reference
 
 ```bash
 # Run v1 + v2 with optional achievement overrides:
@@ -437,7 +564,7 @@ uv run python -m cli stress
 
 ---
 
-## 12. Validation & stress testing
+## 13. Validation & stress testing
 
 | Suite | File | Scope | Pass rate |
 |---|---|---|---|
@@ -450,14 +577,14 @@ uv run python -m cli stress
 
 - **Scale**: 8 → 100 → 1000 → 5000 departments (linear time)
 - **Extreme achievement**: 0.0, 0.5, 1.0, 2.0, 10.0, 100.0
-- **Zero-score freeze**: all ρ=0 → entire perf pool deferred
+- **Zero-score freeze**: all $\rho = 0$ → entire perf pool deferred
 - **Cap overflow**: every dept capped → cascading redistribution
-- **Wide CI**: CI > β → c_star clipped to zero
+- **Wide CI**: CI > $\hat\beta$ → $C_d^{\,*}$ clipped to zero
 - **Fuzz**: 100 random configs, all release gates must pass
 - **Adversarial**: 1 mega-dept + 99 tiny depts
 - **Long-run**: 1000 fuzz iterations, determinism + no drift
-- **Failure injection**: inverted CI, ρ ∉ [0,1], quota sum ≠ 1 — all raise
-- **Property tests**: monotonicity, scaling invariance (2× pool → 2× bonus)
+- **Failure injection**: inverted CI, $\rho \notin [0,1]$, quota sum ≠ 1 — all raise
+- **Property tests**: monotonicity, scaling invariance ($2P \Rightarrow 2\,\text{bonus}$)
 
 ### Benchmark (8 departments, MacBook M-series)
 
@@ -469,12 +596,12 @@ fuzz 1000 runs:    ~1.5 s total
 
 ---
 
-## 13. Road to production
+## 14. Road to production
 
 This is a **model**. Models do not pay people. Real bonus payouts require:
 
 1. **All release gates pass** on the production config.
-2. **Historical backtest**: feed 4–8 quarters of real KPI data through v2, verify β stability and ranking consistency vs. known business outcomes.
+2. **Historical backtest**: feed 4–8 quarters of real KPI data through v2, verify $\hat\beta$ stability and ranking consistency vs. known business outcomes.
 3. **Shadow-run quarter**: run v1 (current process) and v2 (new model) in parallel for one full quarter without telling anyone v2 exists. Compare distributions.
 4. **Reproducibility snapshot**: record config SHA + code commit + seed + approver for every payout run. File it.
 5. **Sign-off**: CFO + HR + business lead sign in writing. No sign-off, no payout.
@@ -483,7 +610,7 @@ If you skip any of these and pay people based solely on this code's output, **yo
 
 ---
 
-## 14. What's NOT here
+## 15. What's NOT here
 
 - **Historical backtest**: requires your real financial data; cannot be pre-baked.
 - **Shadow run harness**: requires your real v1 baseline.
@@ -493,15 +620,15 @@ If you skip any of these and pay people based solely on this code's output, **yo
 
 ---
 
-## 15. License & caveats
+## 16. License & caveats
 
 **MIT License** — see `LICENSE`.
 
 ### Caveats
 
-1. β values are **estimates**, not measurements. Garbage in, garbage out.
+1. $\hat\beta$ values are **estimates**, not measurements. Garbage in, garbage out.
 2. The linear profit model is a **first-order approximation**. Large KPI swings (±50%+) violate it.
-3. v2's `a_max=1.5` clip is a **policy choice**, not a law. Adjust per your risk appetite.
+3. v2's $a_{\max} = 1.5$ clip is a **policy choice**, not a law. Adjust per your risk appetite.
 4. Headcount-based base pool assumes **all heads count equally**. Adjust if seniority/role mix matters.
 5. Quota negotiation is **political**, not mathematical. This tool surfaces the trade-offs; it doesn't resolve them.
 
