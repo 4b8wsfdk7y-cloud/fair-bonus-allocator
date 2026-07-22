@@ -253,6 +253,19 @@ $$\mathrm{Profit}^{(s)} = \alpha + \sum_d \hat{\beta}^{\mathrm{OLS}}_d \cdot \ma
 
 The recovered $\hat{\beta}^{\mathrm{OLS}}_d$ should match the input $\beta_d$ within <1%. **This is your safety check that the linear model is internally consistent** and that the β values you loaded actually reproduce the profit model you claim to have. If recovery error > 1%, the linear assumption is being violated somewhere in your configuration.
 
+**The same check in R is 5 lines** (the Python implementation in `sensitivity.py` is ~38 lines because NumPy doesn't have a native `lm()`):
+
+```r
+# Simulate N scenarios, each dept's KPI is a random multiplier of baseline
+ach <- matrix(runif(N * n_dep, 0.8, 1.5), N)              # N × n_dep achievement matrix
+profit <- profit_base + (ach - 1) %*% (beta * baseline)   # profit via linear model
+df <- data.frame(profit = profit, ach)                     # tidy for lm
+fit <- lm(profit ~ ., data = df)                           # one-line OLS
+recovered <- coef(fit)[-1] / baseline                      # → should equal `beta` within 1%
+```
+
+In Stata, the equivalent after importing the simulated dataset: `reg profit ach_*` and check `e(b)` against your input β.
+
 ### 5.5 Profit gap
 
 $$\mathrm{gap} = \mathrm{target} - \mathrm{base}$$
@@ -427,6 +440,25 @@ $$\mathrm{SE}(\hat{\beta}_d) = \frac{\beta^{\mathrm{upper}} - \beta^{\mathrm{low
 
 This follows from the symmetric two-sided CI construction $\hat{\beta} \pm 1.96 \cdot \mathrm{SE}$. If no CI is supplied, $\mathrm{SE}(\hat{\beta}_d) = 0$ and $C^{*}_d$ collapses to $\rho_d \cdot \max(0, \hat{\beta}_d \cdot \Delta\mathrm{KPI}_d)$ — a pure point estimate with no uncertainty discount.
 
+**In R/Stata, you usually don't compute this by hand.** After fitting the regression that produced $\hat{\beta}$:
+
+```r
+# R: lm() returns SE directly; confint() gives the CI
+fit <- lm(profit ~ kpi_sales + kpi_procurement + ..., data = df)
+se_beta  <- summary(fit)$coefficients["kpi_sales", "Std. Error"]
+ci_beta  <- confint(fit, "kpi_sales", level = 0.95)   # 2.5% / 97.5% bounds
+```
+
+```stata
+* Stata: SE and CI come out of the regression automatically
+reg profit kpi_*
+* matrix list e(V)       → variance-covariance, sqrt(diag) = SE
+* matrix list e(b)       → coefficient vector
+* ereturn display        → includes [95% Conf. Interval]
+```
+
+You only need the formula above when you're loading β estimates from an external source (e.g., a published benchmark or an expert elicitation) and the CI is all you have.
+
 ### 8.6 Score, bonus, and caps
 
 Each department's "target" is its quota share of the profit gap:
@@ -600,6 +632,18 @@ v2 allocate:        < 5 ms
 v2 allocate (5000 depts): ~38 ms
 fuzz 1000 runs:    ~1.5 s total
 ```
+
+### A note on implementation language
+
+The stress-test harness (`stress_test.py`, `deep_stress_test.py`) is ~250 lines of Python, much of it doing things R does natively:
+
+| Task | Python here | R equivalent |
+|---|---|---|
+| Random config generation | ~73 lines with `np.random.default_rng` + Dirichlet | ~25 lines with `rdirichlet` + `tibble` |
+| 1000-iteration determinism check | ~26 lines for-loop + assertions | ~5 lines `replicate(1000, ...)` + `sapply` |
+| Result aggregation + CSV | ~13 lines `pd.DataFrame` + summary | ~5 lines `bind_rows` + `summary()` |
+
+We kept Python here so the stress tests share the same language, dependencies, and CI pipeline as the allocator itself. If you're reproducing the harness in R for exploratory purposes, the random-config generator is the part that shrinks the most.
 
 ---
 

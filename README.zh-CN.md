@@ -253,6 +253,17 @@ $$\mathrm{Profit}^{(s)} = \alpha + \sum_d \hat{\beta}^{\mathrm{OLS}}_d \cdot \ma
 
 恢复出的 $\hat{\beta}^{\mathrm{OLS}}_d$ 应与输入 $\beta_d$ 误差 <1%。**这是确认线性模型内部自洽**、以及你载入的 $\beta$ 确实复现了你声称的利润模型的安全检查。如果恢复误差 >1%，说明配置中某处违反了线性假设。
 
+R 实现极简（Python 实现约 38 行，R 只要 5 行）：
+
+```r
+# 模拟 N 个场景，每个部门的 KPI 是 baseline 的随机倍数
+ach <- matrix(runif(N * n_dep, 0.8, 1.5), N)              # N × n_dep 达成率矩阵
+profit <- profit_base + (ach - 1) %*% (beta * baseline)   # 线性模型算利润
+df <- data.frame(profit = profit, ach)                     # 整理为 lm 可用格式
+fit <- lm(profit ~ ., data = df)                           # 一行 OLS
+recovered <- coef(fit)[-1] / baseline                      # → 应与 `beta` 误差 <1%
+```
+
 ### 5.5 利润缺口
 
 $$\mathrm{gap} = \mathrm{target} - \mathrm{base}$$
@@ -425,6 +436,23 @@ $\rho_d \in [0,1]$（`beta_confidence_weight`）是对 $\hat{\beta}_d$ 信任度
 $$\mathrm{SE}(\hat{\beta}_d) = \frac{\beta^{\mathrm{upper}} - \beta^{\mathrm{lower}}}{2 \cdot 1.96}$$
 
 由对称双侧 CI 构造 $\hat{\beta} \pm 1.96 \cdot \mathrm{SE}$ 反推。若不提供 CI，$\mathrm{SE}(\hat{\beta}_d) = 0$，$C^{*}_d$ 退化为 $\rho_d \cdot \max(0, \hat{\beta}_d \cdot \Delta\mathrm{KPI}_d)$——纯点估计，无不确定性折价。
+
+只有当 β 是从外部来源（行业基准、专家估计、第三方报告）载入时，你才需要上面这个反推公式。如果你在本仓库里跑回归，R 和 Stata 会直接把 SE 和 CI 吐出来：
+
+```r
+# R: lm() 直接返回 SE；confint() 给出 CI
+fit <- lm(profit ~ kpi_sales + kpi_procurement + ..., data = df)
+se_beta  <- summary(fit)$coefficients["kpi_sales", "Std. Error"]
+ci_beta  <- confint(fit, "kpi_sales", level = 0.95)   # 2.5% / 97.5% 上下界
+```
+
+```stata
+* Stata: SE 和 CI 随回归自动输出
+reg profit kpi_*
+* matrix list e(V)       → 方差-协方差矩阵，sqrt(diag) = SE
+* matrix list e(b)       → 系数向量
+* ereturn display        → 直接显示 [95% Conf. Interval]
+```
 
 ### 8.6 评分、奖金与封顶
 
@@ -599,6 +627,18 @@ v2 分配:           < 5 ms
 v2 分配 (5000 部门): ~38 ms
 fuzz 1000 次:      ~1.5 秒总计
 ```
+
+### 关于实现语言的一点说明
+
+本仓库的生产代码用 Python，主要为了和 numpy/pandas/statsmodels 生态一致、便于接 Streamlit dashboard。但 README 里的示例大量使用 R（和少量 Stata），因为 CFO/HR/分析师群体更熟悉这两者，而且对于"算一算、看一眼"这类探索性任务，R 通常更简洁。下表是同一任务在两种语言下的对比：
+
+| 任务 | 本仓库 Python 实现 | R 等价实现 |
+|---|---|---|
+| 随机配置生成（Dirichlet 采样） | ~73 行 `np.random.default_rng` + Dirichlet | ~25 行 `rdirichlet` + `tibble` |
+| 1000 次确定性检查 | ~26 行 for-loop + 断言 | ~5 行 `replicate(1000, ...)` + `sapply` |
+| 结果汇总 + CSV 输出 | ~13 行 `pd.DataFrame` + summary | ~5 行 `bind_rows` + `summary()` |
+
+权衡：Python 版本与主代码库一致、便于 CI 集成；R 版本更适合一次性脚本、ad-hoc 分析、向非技术读者演示。如果你要做严肃的回归诊断（残差图、异方差检验、聚类稳健 SE），R 的 `lm()` + `sandwich` + `ggplot2` 工作流仍然是最顺手的。
 
 ---
 
