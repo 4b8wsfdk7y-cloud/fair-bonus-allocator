@@ -8,6 +8,83 @@
 
 ---
 
+## 🐣 For the completely non-technical reader (start here)
+
+**Imagine you're the CEO.** You have 8 departments and a ¥1,000,000 bonus pool to split among them. Sales sold a lot. Procurement cut costs. Manufacturing improved efficiency. Everyone claims they contributed. How do you split the money **fairly** — in a way that everyone can see the logic and nobody feels cheated?
+
+The hard part: every department measures success differently. Sales measures revenue (¥). Manufacturing measures efficiency (%). Quality measures complaints (count). You can't just compare "Sales did 200" vs "Manufacturing did 95" — those numbers are in different universes.
+
+**This tool solves that problem in 5 steps. You don't need to understand the math — just the 5 steps.**
+
+### Step 1: Translate everything into "profit yuan"
+
+Sales sold ¥30M more revenue. At 8% profit margin, that's ¥2.4M of profit.
+Procurement cut ¥2M of cost. That's ¥2M of profit directly.
+Manufacturing improved efficiency by 5%. That's worth ¥1.25M of profit.
+
+**Now they're all in the same unit: profit yuan.** Sales ¥2.4M, Procurement ¥2M, Manufacturing ¥1.25M — suddenly they're comparable. The department that actually made the company the most money gets the most bonus. Not the department whose raw number looks biggest.
+
+### Step 2: Make "good performance" mean the same thing in every department
+
+Without this step, "A-tier performance" in Sales might be way harder than "A-tier" in Procurement — and that's unfair. We set the tier lines so that **reaching A-tier in any department closes the same amount of the company's profit gap**. Reaching A-tier in Sales = reaching A-tier in Procurement = reaching A-tier in Manufacturing, in terms of actual value delivered.
+
+### Step 3: Split the pool into two halves
+
+- **Half 1 — Base pool (by headcount):** A department with 20 people gets twice as much as a department with 10 people. This is the "you showed up and did your job" portion. Same people, same base.
+- **Half 2 — Performance pool (by contribution):** The department that contributed more profit gets more. Same contribution, same perf bonus.
+
+Why two halves? Pure headcount is unfair to high performers. Pure performance is unfair to small-but-critical teams. The split lets you tune the balance — most companies use 30% base / 70% performance.
+
+### Step 4: Don't pay out money you're not sure was earned
+
+If your estimate of "Sales +¥30M = ¥2.4M profit" comes from a shaky source (an expert guess, a small data sample), you **don't pay out the full ¥2.4M**. You pay out only the portion you're 95% confident was actually earned. If the estimate is too noisy, you pay zero on that contribution — **uncertain money is not paid**.
+
+This is the key thing that makes the system defensible. When someone asks "why did Sales get less this quarter?", you can point to the confidence interval and say "because the β estimate had a wider spread — we weren't sure the contribution was real."
+
+### Step 5: Six safety checks must ALL pass before anyone gets paid
+
+Before the tool says "okay, pay this out," it runs 6 automatic checks:
+- Did we actually distribute between 90% and 100% of the pool? (Not 50%, not 110%)
+- Is every bonus non-negative? (No negative pay)
+- Did everyone who achieved their KPI get a non-negative contribution score?
+- Do quotas add up to 100%?
+- Does "same contribution → same bonus" actually hold?
+- Are there any NaN/undefined values? (Numerical explosion)
+
+**If any check fails, the tool prints `DO NOT PAY` and refuses to produce a payout.** You'd rather have no answer than a wrong answer.
+
+### What you need to give the tool
+
+For each department:
+1. **KPI baseline and stretch target** (e.g., Sales: ¥200M baseline, ¥230M stretch)
+2. **β — how much profit changes per unit of KPI** (e.g., each ¥1 of revenue → ¥0.08 profit)
+3. **Headcount** (e.g., 20 people in Sales)
+4. **β confidence interval** (from a regression) — so the tool can discount uncertain estimates
+5. **Responsibility share** (optional) — what % of the company's profit gap is this department on the hook for
+
+Plus three company-level numbers: total bonus pool, profit target, profit baseline.
+
+### What you get back
+
+A table showing, per department:
+- **Base bonus** (from headcount)
+- **Performance bonus** (from confidence-adjusted contribution)
+- **Total bonus** (base + performance)
+- **Whether all 6 safety checks passed**
+
+Plus a downloadable Excel file with 6 sheets for audit trail.
+
+### Why this is better than the usual spreadsheet
+
+- **Apples-to-apples comparison.** Sales and Procurement are finally on the same scale.
+- **Auditable.** Every bonus number traces back to a formula. No "the CFO said so."
+- **Honest about uncertainty.** Shaky estimates don't turn into real money.
+- **Fair by construction.** Same contribution → same bonus, enforced by math, not by hope.
+
+If you want to actually use this, jump to [§4 (Quick start)](#4-quick-start). If you want to understand *why* each step works, the [TL;DR](#tldr--for-the-impatient-reader) below has the 12-line code version, and the rest of the README explains every line.
+
+---
+
 ## TL;DR — for the impatient reader
 
 You have 8 departments with KPIs in different units (revenue ¥, efficiency %, complaint count, etc.) competing for one ¥1M bonus pool. This tool answers: *who gets what, and why?*
