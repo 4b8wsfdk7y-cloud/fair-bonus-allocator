@@ -1,4 +1,4 @@
-"""Smoke test: run v2 allocator on the real example_wind_cable.yaml."""
+"""Smoke test: run v2 allocator on the real example_config.yaml."""
 from __future__ import annotations
 
 import sys
@@ -12,7 +12,7 @@ from v2_allocator import allocate_v2, reachability_audit
 
 
 def main() -> None:
-    cfg = Config.from_yaml("example_wind_cable.yaml")
+    cfg = Config.from_yaml(Path(__file__).resolve().parent / "example_config.yaml")
     sens = compute_sensitivity(cfg)
 
     print("=== Reachability audit ===")
@@ -32,7 +32,7 @@ def main() -> None:
 
     print("\n=== v2 allocation: scenario B — sales alone excels ===")
     ach_b = {d.name: 1.0 for d in cfg.departments}
-    ach_b["销售"] = 1.4
+    ach_b["Sales"] = 1.4
     result_b = allocate_v2(cfg, sens, achievements=ach_b)
     print(result_b.df.to_string(
         index=False, float_format=lambda x: f"{x:,.2f}"

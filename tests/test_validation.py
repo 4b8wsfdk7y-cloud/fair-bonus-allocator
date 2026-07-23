@@ -379,10 +379,10 @@ def test_null_effect_zero_achievement_variance():
 # ---------------------------------------------------------------------------
 
 def test_end_to_end_realistic_config():
-    """The example wind cable config must run end-to-end without error."""
-    example_path = Path(__file__).resolve().parent.parent / "example_wind_cable.yaml"
-    if not example_path.exists():
-        pytest.skip("example_wind_cable.yaml not found")
+    """The example config must run end-to-end through all three layers.
+    Also runs v2 to catch regressions in the governance layer."""
+    example_path = Path(__file__).resolve().parent.parent / "example_config.yaml"
+    assert example_path.exists(), f"missing example config: {example_path}"
     config = Config.from_yaml(example_path)
     sensitivity = compute_sensitivity(config)
     tiers = calibrate_tiers(config, sensitivity)
@@ -392,3 +392,9 @@ def test_end_to_end_realistic_config():
     assert result.total_allocated > 0
     assert result.total_allocated <= config.pool.pool_total + 1e-6
     assert len(result.df) == len(config.departments)
+
+    # v2 must also run cleanly with default achievements.
+    from v2_allocator import allocate_v2
+    result_v2 = allocate_v2(config, sensitivity)
+    assert result_v2.total_allocated + result_v2.deferred_pool <= config.pool.pool_total + 1e-6
+    assert len(result_v2.df) == len(config.departments)

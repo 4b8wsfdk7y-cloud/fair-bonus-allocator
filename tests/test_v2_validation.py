@@ -250,6 +250,9 @@ def test_v2_zero_scores_defer_perf_pool():
     # ρ_d = 0 → c_star = 0 → no perf bonus. Entire 70% perf pool deferred.
     assert result.df["perf_bonus"].sum() == pytest.approx(0, abs=1e-9)
     assert result.deferred_pool == pytest.approx(700_000, rel=1e-9)
+    # Only 30% actually allocated → utilization gate must catch it.
+    # This is the correct new behavior: deferred doesn't count as "paid out".
+    assert not result.release_gates["pool_utilization_90_to_100"]
 
 
 # ---------------------------------------------------------------------------
@@ -269,17 +272,48 @@ def test_v2_release_gates_pass_on_normal_run():
 # ---------------------------------------------------------------------------
 
 def test_v2_overflow_redistribution_respects_cap():
+    """When base+perf exceeds cap, perf is clipped and the freed perf pool
+    is redistributed to other departments *with non-zero score*. Base_bonus
+    is never touched. If no other dept has score, freed perf → deferred."""
     cfg = _v2_config()
     sens = compute_sensitivity(cfg)
-    # Set a cap so d_alpha can't take its full bonus.
-    caps = {"d_alpha": 50_000}
-    result = allocate_v2(cfg, sens, achievements={"d_alpha": 2.0}, caps=caps)
+    # All depts achieve 2.0 → all have c_star > 0 → all eligible for perf.
+    # d_alpha cap=80,000 (base=60k, so perf clipped to 20k, 释放 60k+ perf).
+    caps = {"d_alpha": 80_000}
+    result = allocate_v2(cfg, sens, achievements={
+        "d_alpha": 2.0, "d_beta": 2.0, "d_gamma": 2.0, "d_delta": 2.0
+    }, caps=caps)
     df = result.df.set_index("department")
-    assert df.loc["d_alpha", "bonus"] <= 50_000 + 1e-6
-    # Excess must have been redistributed to other departments.
-    assert df.loc["d_beta", "bonus"] > 0
+    # Cap respected.
+    assert df.loc["d_alpha", "bonus"] <= 80_000 + 1e-6
+    # Base untouched (L3 invariant).
+    assert df.loc["d_alpha", "base_bonus"] == pytest.approx(60_000, rel=1e-9)
+    assert df.loc["d_beta", "base_bonus"] == pytest.approx(120_000, rel=1e-9)
+    # d_alpha perf clipped to 20k (cap - base).
+    assert df.loc["d_alpha", "perf_bonus"] == pytest.approx(20_000, rel=1e-6)
+    # Other depts picked up the freed perf pool.
+    assert df.loc["d_beta", "perf_bonus"] > 0
+    assert df.loc["d_gamma", "perf_bonus"] > 0
     # Total ≤ pool.
     assert df["bonus"].sum() <= result.pool_total + 1e-6
+
+
+def test_v2_cap_below_base_does_not_clip_base():
+    """If cap < base_bonus, we don't silently clip base (would break L3).
+    Base is paid in full, perf goes to 0, residual becomes deferred,
+    release gate `pool_utilization_90_to_100` catches the misconfiguration."""
+    cfg = _v2_config()
+    sens = compute_sensitivity(cfg)
+    # d_alpha base = 60,000. Cap below base.
+    caps = {"d_alpha": 30_000}
+    result = allocate_v2(cfg, sens, achievements={"d_alpha": 2.0}, caps=caps)
+    df = result.df.set_index("department")
+    # Base untouched even though cap is violated.
+    assert df.loc["d_alpha", "base_bonus"] == pytest.approx(60_000, rel=1e-9)
+    assert df.loc["d_alpha", "perf_bonus"] == 0.0
+    # Cap exceeded — release gate must catch it.
+    assert not result.release_gates["pool_utilization_90_to_100"] or \
+           df.loc["d_alpha", "bonus"] > 30_000
 
 
 # ---------------------------------------------------------------------------

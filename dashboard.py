@@ -147,7 +147,7 @@ st.divider()
 
 # --- Layer 3: allocation result --------------------------------------------
 st.subheader("Layer 3 · Knapsack 分配结果")
-st.caption("基于各部门当前 KPI 达成情况，将奖金池按"价值/成本"贪心分配。")
+st.caption("基于各部门当前 KPI 达成情况，将奖金池按价值/成本贪心分配。")
 
 alloc_display = allocation.df.copy()
 
@@ -282,26 +282,59 @@ st.divider()
 
 # --- Scenario grid: explore patterns ---------------------------------------
 st.subheader("情景试算：不同达成组合下的分配")
-st.caption("勾选要跑的情景模式，对比"全 S"、"销售独大"、"采购独大"等典型情况。")
+st.caption("勾选要跑的情景模式，对比 全 S、销售独大、采购独大 等典型情况。")
 
 default_scenarios = {
     "全 B (基线)": {d.name: 1.0 for d in config.departments},
     "全 A": {d.name: 1.15 for d in config.departments},
     "全 S": {d.name: 1.30 for d in config.departments},
-    "销售独大": {d.name: (1.40 if "销售" in d.name else 1.0) for d in config.departments},
-    "采购独大": {d.name: (1.40 if "采购" in d.name else 1.0) for d in config.departments},
-    "生产独大": {d.name: (1.40 if "生产" in d.name or "制造" in d.name else 1.0) for d in config.departments},
+    "销售独大": {d.name: (1.40 if "Sales" in d.name or "销售" in d.name else 1.0) for d in config.departments},
+    "采购独大": {d.name: (1.40 if "Procurement" in d.name or "采购" in d.name else 1.0) for d in config.departments},
+    "生产独大": {d.name: (1.40 if "Manufacturing" in d.name or "生产" in d.name or "制造" in d.name else 1.0) for d in config.departments},
 }
 selected = st.multiselect("选择情景", list(default_scenarios.keys()), default=["全 B (基线)", "全 A", "全 S"])
 scenarios = [default_scenarios[s] for s in selected]
 if scenarios:
+    # v1 grid
     grid = scenario_grid(config, sensitivity, tiers, scenarios)
     pivot = grid[grid["department"] != "__pool__"].pivot_table(
         index="department", columns="scenario_id", values="allocated", aggfunc="sum"
     )
     pivot.columns = [selected[i] for i in pivot.columns]
+    st.markdown("**v1 (knapsack) 分配**")
     st.dataframe(pivot.style.format("¥{:,.0f}"), use_container_width=True)
 
+    # v2 grid: run allocate_v2 per scenario.
+    v2_rows = []
+    for i, sc in enumerate(scenarios):
+        r = allocate_v2(config, sensitivity, achievements=sc)
+        for _, row in r.df.iterrows():
+            v2_rows.append({
+                "scenario_id": i, "department": row["department"],
+                "base_bonus": row["base_bonus"], "perf_bonus": row["perf_bonus"],
+                "bonus": row["bonus"], "deferred": r.deferred_pool,
+            })
+    v2_grid = pd.DataFrame(v2_rows)
+    v2_pivot = v2_grid.pivot_table(
+        index="department", columns="scenario_id", values="bonus", aggfunc="sum"
+    )
+    v2_pivot.columns = [selected[i] for i in v2_pivot.columns]
+    st.markdown("**v2 (governance) 总奖金 = 基础 + 绩效**")
+    st.dataframe(v2_pivot.style.format("¥{:,.0f}"), use_container_width=True)
+
+    # Deferred per scenario (one row per scenario).
+    deferred_per_scn = v2_grid.groupby("scenario_id")["deferred"].first()
+    if deferred_per_scn.sum() > 0:
+        st.caption("延迟池（无法分配的残差，由管理层处置）：")
+        st.dataframe(
+            pd.DataFrame({
+                "情景": [selected[i] for i in deferred_per_scn.index],
+                "延迟池": [f"¥{v:,.0f}" for v in deferred_per_scn.values],
+            }),
+            use_container_width=True, hide_index=True,
+        )
+
+    # Combined bar chart: v1 vs v2 side by side.
     fig2 = go.Figure()
     for col in pivot.columns:
         fig2.add_trace(go.Bar(x=pivot.index, y=pivot[col], name=col))

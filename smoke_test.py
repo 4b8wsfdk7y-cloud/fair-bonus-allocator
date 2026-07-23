@@ -16,7 +16,7 @@ from allocator import allocate, scenario_grid
 
 
 def main() -> None:
-    config = Config.from_yaml(Path(__file__).resolve().parent / "example_wind_cable.yaml")
+    config = Config.from_yaml(Path(__file__).resolve().parent / "example_config.yaml")
 
     print("=" * 72)
     print("Layer 1 · 敏感性建模")
@@ -46,7 +46,7 @@ def main() -> None:
     print("\n" + "=" * 72)
     print("Layer 3 · Knapsack 分配（情景：销售独大）")
     print("=" * 72)
-    achievements_sales = {d.name: (1.40 if d.name == "销售" else 1.0) for d in config.departments}
+    achievements_sales = {d.name: (1.40 if d.name == "Sales" else 1.0) for d in config.departments}
     alloc_sales = allocate(config, sensitivity, tiers, achievements=achievements_sales)
     print(alloc_sales.df.to_string(index=False, float_format=lambda x: f"{x:,.2f}"))
     print(f"\n已分配: ¥{alloc_sales.total_allocated:,.0f}")

@@ -214,16 +214,39 @@ def allocate_v2(
 
     df["bonus"] = df["base_bonus"] + df["perf_bonus"]
 
-    # Cap handling: overflow is redistributed proportionally to remaining scores.
+    # Cap handling. Caps apply to TOTAL bonus (base + perf), but only the
+    # perf portion is reducible — base_bonus is a rigid headcount-based
+    # entitlement (L3 invariant: same headcount → same base bonus). So:
+    #
+    #   - If base_bonus alone > cap: config error, but we don't silently
+    #     clip+redistribute base (that would break L3). Instead, leave
+    #     base untouched, set perf=0 for that dept, carry the residual as
+    #     deferred. Release gate `pool_utilization_90_to_100` will catch it.
+    #   - If base_bonus + perf_bonus > cap: clip perf down to (cap - base),
+    #     redistribute the freed perf pool to other depts proportionally
+    #     to their score. Base untouched.
     if caps:
         for _ in range(10):  # bounded iterations to prevent infinite loops
             excess = 0.0
             for idx, row in df.iterrows():
                 cap = caps.get(row["department"], float("inf"))
                 if row["bonus"] > cap + 1e-6:
-                    excess += row["bonus"] - cap
-                    df.at[idx, "bonus"] = cap
+                    # Reduce perf_bonus, not bonus. Never touch base_bonus.
+                    reduction = row["bonus"] - cap
+                    # perf_bonus can't go below 0; anything beyond is
+                    # base-overflow → carried to deferred, not redistributed.
+                    perf_reduction = min(reduction, row["perf_bonus"])
+                    if perf_reduction <= 0:
+                        # base_bonus itself exceeds cap; can't reduce perf.
+                        # Mark score=0 so this dept won't absorb more cascade
+                        # overflow, and leave bonus as-is. Residual handled
+                        # by release gate.
+                        df.at[idx, "score"] = 0.0
+                        continue
+                    df.at[idx, "perf_bonus"] -= perf_reduction
+                    df.at[idx, "bonus"] = df.at[idx, "base_bonus"] + df.at[idx, "perf_bonus"]
                     df.at[idx, "score"] = 0.0  # remove from future redistribution
+                    excess += perf_reduction
             if excess <= 1e-6:
                 break
             remaining = df[df["score"] > 0]
@@ -231,7 +254,8 @@ def allocate_v2(
                 break
             shares = remaining["score"] / remaining["score"].sum()
             for idx in remaining.index:
-                df.at[idx, "bonus"] += excess * shares[idx]
+                df.at[idx, "perf_bonus"] += excess * shares[idx]
+                df.at[idx, "bonus"] = df.at[idx, "base_bonus"] + df.at[idx, "perf_bonus"]
 
     # Deferred pool = whatever couldn't be distributed.
     allocated = df["bonus"].sum()
@@ -289,10 +313,14 @@ def _evaluate_release_gates(
 ) -> dict[str, bool]:
     """Release gates: each must be true before v2 result can be paid out."""
     return {
-        # Gate 1: total allocation within [90%, 100%] of pool.
+        # Gate 1: actually-allocated bonus within [90%, 100%] of pool.
+        # Deferred pool doesn't count — it's the residual we FAILED to
+        # distribute. Previously this gate checked (allocated + deferred),
+        # which always equals P by construction when deferred_pool_enabled,
+        # making the 90% floor meaningless. Now checks `allocated` only.
         "pool_utilization_90_to_100": (
             0.9 * config.pool.pool_total
-            <= df["bonus"].sum() + deferred
+            <= df["bonus"].sum()
             <= 1.0 * config.pool.pool_total + 1e-6
         ),
         # Gate 2: every department with β confidence weight > 0 has a non-NaN bonus.

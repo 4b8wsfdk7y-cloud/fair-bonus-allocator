@@ -630,7 +630,7 @@ fuzz 1000 次:      ~1.5 秒总计
 
 ### 关于实现语言的一点说明
 
-本仓库的生产代码用 Python，主要为了和 numpy/pandas/statsmodels 生态一致、便于接 Streamlit dashboard。但 README 里的示例大量使用 R（和少量 Stata），因为 CFO/HR/分析师群体更熟悉这两者，而且对于"算一算、看一眼"这类探索性任务，R 通常更简洁。下表是同一任务在两种语言下的对比：
+本仓库的生产代码用 Python，主要为了和 numpy/pandas 生态一致、便于接 Streamlit dashboard。但 README 里的示例大量使用 R（和少量 Stata），因为 CFO/HR/分析师群体更熟悉这两者，而且对于"算一算、看一眼"这类探索性任务，R 通常更简洁。下表是同一任务在两种语言下的对比：
 
 | 任务 | 本仓库 Python 实现 | R 等价实现 |
 |---|---|---|
