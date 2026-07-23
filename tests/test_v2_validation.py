@@ -287,17 +287,23 @@ def test_v2_overflow_redistribution_respects_cap():
 # ---------------------------------------------------------------------------
 
 def test_v2_reachability_audit_flags_unreachable_tier():
-    """A department whose stretch_impact < A-tier profit target must be flagged."""
+    """A department whose stretch_impact < its q_d × θ_A × gap target is flagged.
+
+    With explicit quotas, the v2 audit target is q_d × θ × gap (so that
+    "every dept at A" closes exactly one profit gap). Here we set quotas
+    so weak has q=0.5 → A target = 0.5 × 0.15 × 3M = 225k; weak only
+    produces 100k → cannot reach A.
+    """
     pool = PoolConfig(
         pool_total=1_000_000, profit_target=20_000_000, profit_baseline=17_000_000,
         theta_a=0.15, theta_s=0.30,
     )
-    # profit_gap = 3M; A target = 0.45M; S target = 0.9M
+    # profit_gap = 3M
     deps = [
-        # Strong dept: stretch_impact = 1000 × 100 = 100k > A target? No, < 450k. NOT reach A.
-        Department(name="weak", kpi_baseline=0, kpi_stretch=100, beta=1000),
-        # Strong dept: stretch_impact = 1000 × 1000 = 1M > 900k → reaches S.
-        Department(name="strong", kpi_baseline=0, kpi_stretch=1000, beta=1000),
+        # stretch_impact = 1000 × 100 = 100k. q=0.5 → A target = 225k. Cannot reach A.
+        Department(name="weak", kpi_baseline=0, kpi_stretch=100, beta=1000, quota=0.5),
+        # stretch_impact = 1000 × 1000 = 1M. q=0.5 → S target = 450k. Reaches S.
+        Department(name="strong", kpi_baseline=0, kpi_stretch=1000, beta=1000, quota=0.5),
     ]
     cfg = Config(pool=pool, departments=deps)
     sens = compute_sensitivity(cfg)
@@ -306,3 +312,24 @@ def test_v2_reachability_audit_flags_unreachable_tier():
     assert not audit.loc["weak", "can_reach_s"]
     assert audit.loc["strong", "can_reach_a"]
     assert audit.loc["strong", "can_reach_s"]
+
+
+def test_v2_reachability_audit_uses_quota_weights():
+    """A small-quota dept has a smaller A target, so it can reach A even with
+    modest stretch_impact. Same stretch_impact, different quota → different reach."""
+    pool = PoolConfig(
+        pool_total=1_000_000, profit_target=20_000_000, profit_baseline=17_000_000,
+        theta_a=0.15, theta_s=0.30,
+    )
+    deps = [
+        # Both depts have stretch_impact = 100k.
+        # big_quota: q=0.9 → A target = 405k → cannot reach.
+        # small_quota: q=0.1 → A target = 45k → can reach.
+        Department(name="big_quota", kpi_baseline=0, kpi_stretch=100, beta=1000, quota=0.9),
+        Department(name="small_quota", kpi_baseline=0, kpi_stretch=100, beta=1000, quota=0.1),
+    ]
+    cfg = Config(pool=pool, departments=deps)
+    sens = compute_sensitivity(cfg)
+    audit = reachability_audit(cfg, sens).set_index("department")
+    assert not audit.loc["big_quota", "can_reach_a"]
+    assert audit.loc["small_quota", "can_reach_a"]

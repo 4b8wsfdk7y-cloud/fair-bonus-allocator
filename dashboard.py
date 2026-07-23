@@ -18,12 +18,13 @@ from config import Config
 from sensitivity import compute_sensitivity, monte_carlo_profit
 from tiers import calibrate_tiers
 from allocator import allocate, scenario_grid
+from v2_allocator import allocate_v2, reachability_audit
 
 st.set_page_config(page_title="科学分钱 · 奖金池分配器", page_icon="💰", layout="wide")
 st.title("💰 科学分钱 — 多部门奖金池分配器")
 
 # --- Sidebar: configuration file -------------------------------------------
-DEFAULT_CONFIG = Path(__file__).resolve().parent / "example_wind_cable.yaml"
+DEFAULT_CONFIG = Path(__file__).resolve().parent / "example_config.yaml"
 config_path = st.sidebar.text_input("配置文件路径", value=str(DEFAULT_CONFIG))
 
 try:
@@ -71,18 +72,32 @@ for d in config.departments:
 sensitivity = compute_sensitivity(config)
 tiers = calibrate_tiers(config, sensitivity)
 allocation = allocate(config, sensitivity, tiers, achievements=achievements)
+v2_result = allocate_v2(config, sensitivity, achievements=achievements)
+v2_audit = reachability_audit(config, sensitivity)
 
 profit_gap = sensitivity.profit_gap
 st.session_state["sensitivity"] = sensitivity
 st.session_state["tiers"] = tiers
 st.session_state["allocation"] = allocation
+st.session_state["v2_result"] = v2_result
+st.session_state["v2_audit"] = v2_audit
 
 # --- Header KPIs -----------------------------------------------------------
-c1, c2, c3, c4 = st.columns(4)
+all_gates_ok = all(bool(v) for v in v2_result.release_gates.values())
+c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("奖金池", f"¥{pool_total:,.0f}")
 c2.metric("利润缺口 (B→Target)", f"¥{profit_gap:,.0f}", help="净利润目标减去 KPI 全达成的基线")
-c3.metric("已分配", f"¥{allocation.total_allocated:,.0f}")
-c4.metric("剩余", f"¥{allocation.pool_remaining:,.0f}")
+c3.metric("v1 已分配", f"¥{allocation.total_allocated:,.0f}")
+c4.metric("v2 已分配", f"¥{v2_result.total_allocated:,.0f}")
+c5.metric(
+    "v2 延迟池",
+    f"¥{v2_result.deferred_pool:,.0f}",
+    help="无法分配（如所有部门被置信门冻结）的残差，由管理层处置",
+)
+gate_color = "🟢" if all_gates_ok else "🔴"
+st.warning(
+    f"{gate_color} v2 发布闸门：{'全部通过' if all_gates_ok else '未通过 — DO NOT PAY'}"
+) if not all_gates_ok else st.success(f"{gate_color} v2 发布闸门：全部通过")
 
 st.divider()
 
@@ -183,6 +198,85 @@ fig.update_layout(
     height=400,
 )
 st.plotly_chart(fig, use_container_width=True)
+
+st.divider()
+
+# --- v2 governance: reachability audit & allocation ------------------------
+st.subheader("Layer 3 · v2 治理分配")
+st.caption(
+    "基础池按人头分（同人数同基础奖），绩效池按置信调整后贡献 $C^*_d$ 分（同贡献同绩效奖）。"
+    "6 道发布闸门全部通过才能发薪。"
+)
+
+st.markdown("**可达性审计**")
+audit_display = v2_audit.copy()
+audit_display["can_reach_a"] = audit_display["can_reach_a"].map({True: "✓", False: "⚠ 无法到达"})
+audit_display["can_reach_s"] = audit_display["can_reach_s"].map({True: "✓", False: "—"})
+st.dataframe(
+    audit_display.style.format(
+        {
+            "beta": "{:.4g}",
+            "stretch_impact": "¥{:,.0f}",
+            "a_target_profit": "¥{:,.0f}",
+            "s_target_profit": "¥{:,.0f}",
+        }
+    ),
+    use_container_width=True,
+    hide_index=True,
+)
+unreachable = v2_audit[~v2_audit["can_reach_a"]]
+if len(unreachable) > 0:
+    st.warning(
+        f"⚠ {len(unreachable)} 个部门的 stretch 再拼也到不了 A 档。"
+        "别静默让他们背锅——先重谈 quota 或 KPI baseline。"
+    )
+
+st.markdown("**v2 分配结果**")
+v2_display = v2_result.df.copy()
+st.dataframe(
+    v2_display.style.format(
+        {
+            "headcount": "{:d}",
+            "achievement": "{:.2f}",
+            "quota": "{:.2f}",
+            "c_hat": "¥{:,.0f}",
+            "c_lower_95": "¥{:,.0f}",
+            "c_star": "¥{:,.0f}",
+            "target": "¥{:,.0f}",
+            "achievement_rate": "{:.2f}",
+            "achievement_rate_clipped": "{:.2f}",
+            "score": "{:.4f}",
+            "base_bonus": "¥{:,.0f}",
+            "perf_bonus": "¥{:,.0f}",
+            "bonus": "¥{:,.0f}",
+        }
+    ),
+    use_container_width=True,
+    hide_index=True,
+)
+
+st.markdown("**发布闸门**")
+gate_df = pd.DataFrame(
+    [(k, "✓" if v else "✗") for k, v in v2_result.release_gates.items()],
+    columns=["gate", "status"],
+)
+st.table(gate_df)
+
+# v1 vs v2 对比图
+fig_v2 = go.Figure()
+fig_v2.add_trace(go.Bar(
+    x=v2_result.df["department"], y=v2_result.df["base_bonus"],
+    name="基础池 (按人头)", marker_color="#4C78A8"
+))
+fig_v2.add_trace(go.Bar(
+    x=v2_result.df["department"], y=v2_result.df["perf_bonus"],
+    name="绩效池 (按 C*)", marker_color="#F58518"
+))
+fig_v2.update_layout(
+    barmode="stack", title="v2 分解：基础 + 绩效",
+    xaxis_title="部门", yaxis_title="金额 (¥)", height=400,
+)
+st.plotly_chart(fig_v2, use_container_width=True)
 
 st.divider()
 

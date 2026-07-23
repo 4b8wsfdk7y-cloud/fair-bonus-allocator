@@ -58,22 +58,23 @@ def reachability_audit(config: Config, sens: SensitivityResult) -> pd.DataFrame:
     """For each department, can its stretch KPI actually produce enough profit
     contribution to hit A and S tier targets?
 
-    Uses v1 θ_A/θ_S targets by default. With v2 quotas, uses q_d × profit_gap.
+    With v2 quotas, the per-department A/S target is q_d × θ × gap (so that
+    "every department at A" closes exactly one profit gap). Without quotas,
+    falls back to the v1 θ × gap target.
     """
     gap = sens.profit_gap
+    quotas = resolve_quotas(config, sens)
     rows = []
     for d in config.departments:
         stretch_impact = d.beta * (d.kpi_stretch - d.kpi_baseline)
-        if d.quota is not None:
-            a_target = config.pool.theta_a * gap  # v1 θ_A still governs "A tier"
-            s_target = config.pool.theta_s * gap
-        else:
-            a_target = config.pool.theta_a * gap
-            s_target = config.pool.theta_s * gap
+        q_d = quotas[d.name]
+        a_target = q_d * config.pool.theta_a * gap
+        s_target = q_d * config.pool.theta_s * gap
         rows.append({
             "department": d.name,
             "beta": d.beta,
             "stretch_impact": stretch_impact,
+            "quota": q_d,
             "a_target_profit": a_target,
             "s_target_profit": s_target,
             "can_reach_a": stretch_impact >= a_target - 1e-6,
@@ -237,13 +238,30 @@ def allocate_v2(
     if pool.deferred_pool_enabled:
         deferred = max(P - allocated, 0.0)
     else:
-        # Force allocation to exactly P: scale up (or down) proportionally.
-        if allocated > 0:
-            scale = P / allocated
-            df["bonus"] *= scale
-            df["base_bonus"] *= scale
-            df["perf_bonus"] *= scale
-        deferred = 0.0
+        # Force allocation to exactly P. Base pool is a rigid headcount-based
+        # entitlement — scaling it would break "same headcount → same base
+        # bonus" (the L3 fairness invariant). Only the perf pool is scalable.
+        # Strategy: if perf pool over-allocated, scale perf down; if under-
+        # allocated, scale perf up to absorb the slack. Base pool untouched.
+        perf_sum = df["perf_bonus"].sum()
+        target_perf = P - base_pool  # whatever's left after rigid base pool
+        if perf_sum > 1e-9:
+            perf_scale = max(target_perf, 0.0) / perf_sum
+            df["perf_bonus"] *= perf_scale
+        else:
+            # No perf signal to scale; leave base as-is. If base_pool < P,
+            # there's a residual we can't distribute without violating the
+            # base-pool rigidity. Carry it as deferred (even though
+            # deferred_pool_enabled=False) to avoid overpaying.
+            pass
+        df["bonus"] = df["base_bonus"] + df["perf_bonus"]
+        # In the edge case where base_pool alone exceeds P (misconfiguration),
+        # we have to scale base down to fit — there's no other way. Flag it.
+        if df["base_bonus"].sum() > P:
+            base_scale = P / df["base_bonus"].sum()
+            df["base_bonus"] *= base_scale
+            df["bonus"] = df["base_bonus"] + df["perf_bonus"]
+        deferred = max(P - df["bonus"].sum(), 0.0)
 
     # Release gates (audit flags).
     release_gates = _evaluate_release_gates(df, config, sens, deferred)
